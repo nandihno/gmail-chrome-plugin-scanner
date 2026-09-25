@@ -39,6 +39,18 @@
           <div><dt>Body</dt><dd id="body-size"></dd></div>
           <div><dt>Links</dt><dd id="link-count"></dd></div>
         </dl>
+        <p class="privacy-note">When you choose to analyze, this message is sent to TypeSafe Jev through your local relay.</p>
+        <button id="analyze" type="button" hidden>Analyze with Jev <span aria-hidden="true">↗</span></button>
+      </section>
+
+      <section class="assessment" id="assessment" hidden aria-live="polite" aria-labelledby="assessment-title">
+        <div class="assessment-heading">
+          <p class="section-number">JEV ASSESSMENT</p>
+          <span class="risk-band" id="risk-band"></span>
+        </div>
+        <h2 id="assessment-title"></h2>
+        <p class="coverage" id="coverage"></p>
+        <ul id="signals"></ul>
       </section>
 
       <footer>
