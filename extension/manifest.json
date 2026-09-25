@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Inbox Signal",
+  "version": "0.1.0",
+  "description": "Inspect the open Gmail message before a future Jev risk check.",
+  "minimum_chrome_version": "92",
+  "permissions": ["activeTab", "scripting"],
+  "action": {
+    "default_title": "Inbox Signal",
+    "default_popup": "popup/popup.html"
+  }
+}

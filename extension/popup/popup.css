@@ -1,0 +1,102 @@
+:root {
+  color-scheme: light;
+  font-family: "Avenir Next", Avenir, "Trebuchet MS", sans-serif;
+  color: #172b2a;
+  background: #f5f2e9;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 364px;
+  min-height: 425px;
+  margin: 0;
+  background: radial-gradient(circle at 86% 7%, #e3ede6 0, transparent 34%), #f5f2e9;
+}
+
+.shell { padding: 24px; }
+
+.masthead { display: flex; align-items: center; gap: 13px; }
+
+.mark {
+  width: 37px;
+  height: 37px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid #153e38;
+  border-radius: 50%;
+}
+
+.mark span { width: 4px; background: #153e38; border-radius: 3px; }
+.mark span:nth-child(1) { height: 8px; }
+.mark span:nth-child(2) { height: 16px; }
+.mark span:nth-child(3) { height: 11px; }
+
+.eyebrow, .section-number, footer {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .15em;
+}
+
+.eyebrow { margin: 0 0 3px; color: #5a756d; }
+h1 { margin: 0; font: 700 18px Georgia, serif; letter-spacing: -.02em; }
+
+.intro { margin: 38px 0 28px; }
+.section-number { margin: 0 0 13px; color: #b45536; }
+.intro h2 { max-width: 285px; margin: 0; font: 400 32px/1.05 Georgia, serif; letter-spacing: -.04em; }
+.intro > p:last-child { max-width: 275px; margin: 15px 0 0; color: #536763; font-size: 13px; line-height: 1.55; }
+
+.panel {
+  padding: 17px;
+  border: 1px solid #c7d3cb;
+  border-radius: 12px;
+  background: #fffefa;
+  box-shadow: 0 10px 24px #22433a0b;
+}
+
+.status-row { display: flex; align-items: flex-start; gap: 8px; min-height: 31px; }
+.status-row p { margin: 0 0 12px; font-size: 12px; line-height: 1.45; }
+.status-dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: #b45536; }
+.status-dot.ready { background: #438272; }
+.status-dot.error { background: #bd4d3c; }
+
+button {
+  width: 100%;
+  min-height: 43px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 7px;
+  background: #153e38;
+  color: #fffefa;
+  font: 700 12px "Avenir Next", Avenir, "Trebuchet MS", sans-serif;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled), button:focus-visible:not(:disabled) { background: #245b51; }
+button:focus-visible { outline: 2px solid #b45536; outline-offset: 3px; }
+button:disabled { background: #aebbb3; cursor: not-allowed; }
+button span { font-size: 18px; font-weight: 400; }
+
+.message { margin-top: 23px; padding-top: 20px; border-top: 1px solid #c7d3cb; }
+.message h2 { margin: 0 0 16px; font: 400 21px/1.2 Georgia, serif; overflow-wrap: anywhere; }
+dl { margin: 0; }
+dl div { display: grid; grid-template-columns: 52px 1fr; gap: 12px; padding: 6px 0; font-size: 12px; }
+dt { color: #62746d; }
+dd { margin: 0; overflow-wrap: anywhere; }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 24px;
+  color: #6b8178;
+  letter-spacing: .09em;
+}
+
+footer span:last-child { text-align: right; font-weight: 500; letter-spacing: 0; text-transform: none; }
