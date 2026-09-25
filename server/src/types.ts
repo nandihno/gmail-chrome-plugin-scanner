@@ -15,6 +15,20 @@ export interface CapturedMessage {
   linksTruncated: boolean;
 }
 
+export type RecipientRelation = "to_me" | "cc_me" | "not_listed" | "unclear";
+
+export interface BatchCapturedMessage extends CapturedMessage {
+  recipientRelation: RecipientRelation;
+}
+
+export type EmailPurpose =
+  | "shopping_commercial"
+  | "transactional"
+  | "newsletter"
+  | "personal_correspondence"
+  | "work_or_service"
+  | "other";
+
 export interface RiskSignal {
   id: string;
   label: string;
@@ -27,4 +41,14 @@ export interface AnalysisResponse {
   confidence: number;
   signals: RiskSignal[];
   coverage: "complete" | "limited";
+  purpose: EmailPurpose;
+  purposeConfidence: number;
+  importanceProbability: number;
+  likelyNeedsAttention: boolean;
+}
+
+export interface BatchAnalysisResult {
+  index: number;
+  result?: AnalysisResponse;
+  error?: "analysis_failed" | "not_analyzed";
 }

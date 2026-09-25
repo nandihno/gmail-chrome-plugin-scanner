@@ -1,17 +1,15 @@
 # Inbox Signal
 
-Inbox Signal is a Chrome Manifest V3 extension that captures the currently open Gmail message on demand, then asks TypeSafe Jev to assess phishing and social engineering signals through a local Node.js relay.
+Inbox Signal is a Chrome Manifest V3 extension that checks an open Gmail message or creates an on-demand overview of up to the 20 newest Inbox messages. It uses Gmail's read-only API for the batch flow and TypeSafe Jev, through a local Node.js relay, for message purpose, attention, and phishing-risk judgments.
 
-## Start the local Jev relay
+The batch report separates Jev's provisional “needs attention” estimate from deterministic To/Cc header matching. “Not listed in To/Cc” can also mean Bcc, forwarding, a mailing list, or an unlisted alias; it is not proof of a misdelivery. Inbox Signal does not modify messages or analyze attachments.
 
-1. Use Node.js 20.6 or newer (the relay uses Node's built-in `.env` loading).
-2. Open `chrome://extensions`, turn on **Developer mode**, and choose **Load unpacked**.
-3. Select this repository's `extension/` directory and copy its extension ID.
-4. In `server/`, copy `.env.example` to `.env`. Set `TYPESAFE_API_KEY` to your Jev key and `EXTENSION_ID` to the ID shown by Chrome. Keep `server/.env` private; it is ignored by Git.
-5. From `server/`, run `npm install` once, then `npm run dev`.
-6. Visit `http://127.0.0.1:8787/health`; the response should be `{"status":"ok"}`.
-7. Reload the extension in `chrome://extensions`. Open a Gmail email, choose **Capture open message**, review the captured sender and subject, then choose **Analyze with Jev**.
+## Quick start
 
-The relay binds only to `127.0.0.1` and allows the configured extension ID. It is for local development and is not a deployable public service. The popup requires a second click to send the captured message to TypeSafe. Link paths, query strings, and fragments are removed before the relay sends link destinations to Jev.
+1. Load `extension/` unpacked from `chrome://extensions` and copy the extension ID.
+2. For batch scanning, configure a Google Cloud OAuth client for that Chrome extension ID, enable the Gmail API, and replace the OAuth `client_id` placeholder in `extension/manifest.json`. The requested scope is Gmail read-only; see [howtorun.md](howtorun.md) for detailed steps and Google's restricted-scope caveats.
+3. Copy `server/.env.example` to `server/.env`, then set `TYPESAFE_API_KEY`, `EXTENSION_ID`, and `PORT=8787`.
+4. In `server/`, run `npm install`, `npm run typecheck`, then `npm run dev`.
+5. Reload the extension. From the toolbar popup choose **Capture open message** for one email, or **Open batch scanner** to authorize Gmail and scan the latest 20 Inbox messages.
 
-To type-check the server, run `npm run typecheck` from `server/`. For the full design, provisional risk rules, privacy boundaries, and future deployment work, see [implementation.md](implementation.md).
+The Jev token remains in `server/.env`; Gmail OAuth tokens stay in Chrome. Email content is sent to Jev only after the user starts an analysis. See [howtorun.md](howtorun.md) for testing and troubleshooting, and [implementation.md](implementation.md) for architecture, data boundaries, and remaining work.

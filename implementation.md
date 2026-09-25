@@ -1,108 +1,121 @@
-# Inbox Signal implementation plan
+# Inbox Signal implementation
 
 ## Goal and first release
 
-Help the person reading Gmail assess the **currently open, expanded email** for signs of phishing or unusual requests. The first release is an on-demand check from the Chrome toolbar. The popup shows a risk band, the specific signals that contributed to it, and a short suggestion such as verifying the sender through a known channel. The extension must never silently quarantine, delete, or click anything in Gmail.
+Inbox Signal is an on-demand Chrome extension for reviewing Gmail email. It has two flows:
 
-The current implementation captures a message on demand, shows a preview, and sends it to Jev only after a second explicit click. An inbox-wide scan would require a separate product decision and likely Gmail API/OAuth work; the current `activeTab` permission supports only the user-invoked tab.
+1. Capture the currently open, expanded message in Gmail and review it individually.
+2. Scan up to the 20 newest messages labeled `INBOX`, then show category, recipient-header, attention, and phishing-risk summaries.
 
-## Architecture
+The extension is report-only. It never sends, archives, labels, deletes, marks read, or otherwise changes email. The user initiates each scan and grants Google access through Chrome's OAuth prompt. The batch flow reads message bodies, but does not fetch or analyze attachments.
+
+## Architecture and data flow
 
 ```text
-Gmail page (open message)
-  → on-demand isolated script: subject, sender, visible body, links
-  → extension popup: preview and request consent
-  → local analysis endpoint: validate, minimize, and rate-limit
-  → TypeSafe Jev: independent typed judgments
-  → endpoint: combine judgments with deterministic link checks
-  → popup: risk band and evidence labels
+Single-message flow
+Gmail DOM → user-invoked content script → popup preview/consent → local relay → Jev → risk + triage result
+
+Batch flow
+User click → Chrome Identity OAuth → Gmail API (profile, latest 20 Inbox IDs, then full messages)
+           → local To/Cc comparison + text/MIME parsing → batch request to local relay
+           → bounded Jev calls → report page (percentages, categories, recipient relationship, evidence)
 ```
 
-The Jev API token is a server secret named `TYPESAFE_API_KEY`. Do not put it in the extension source, manifest, browser storage, or an `extension/` asset. Chrome extensions are distributed to users, so a bundled token cannot remain secret. The current relay is a development service: it binds only to loopback and checks the configured extension origin. That origin check is not full authentication. A deployed endpoint needs user authentication, request size limits, rate limiting, and a narrowly configured extension origin. Never treat a CORS allowlist alone as authentication.
+The extension uses Gmail API `messages.list` with `labelIds=INBOX` and `maxResults=20`; the API returns message IDs in newest-first order, and each message needs a separate `messages.get` request for full details. Gmail API scope `gmail.readonly` is required because the scan uses message bodies as well as headers. The Chrome Identity API provides the OAuth access token directly to the extension; it is never sent to the local relay or Jev.
 
-When the endpoint exists, add its exact origin to the extension's `host_permissions`; the current manifest has no network host permission. The endpoint address itself is configuration, not a secret.
+The list call is read-only. The scanner requests only the first page of at most 20 messages, fetches message details with a small concurrency limit, extracts the first readable plain-text part (or HTML text as a fallback), and ignores MIME parts marked as attachments. Body text is capped at 8,000 characters per message; at most 12 links are sent to the relay.
 
-The browser extension has no build dependencies. The `server/` package uses the official `@typesafe-ai/sdk` JavaScript SDK, which requires Node.js 20+ and reads `TYPESAFE_API_KEY` from the environment. The local runner uses Node's built-in `.env` loading and therefore needs Node.js 20.6+. It currently calls `model: "jev-latest"`; before release, evaluate the chosen version and pin a model version so model updates do not silently change calibrated behavior. The raw API alternative is `POST https://api.typesafe.ai/v1/systemone` with a bearer token.
+The extension compares `To` and `Cc` addresses with the authenticated Gmail profile address plus optional user-entered aliases. That comparison happens in the browser. Alias addresses are stored in `chrome.storage.local` and are not sent to the relay or Jev. The server receives only one of these relationship labels: `to_me`, `cc_me`, `not_listed`, or `unclear`. Not listed in To/Cc is not proof of a misdelivery: Bcc, forwarding, mailing lists, and unregistered aliases can explain it.
 
-## Data contract
+```text
+Gmail API ──OAuth token──> extension only
+Gmail content ───────────> extension memory ──> 127.0.0.1 relay ──> Jev
+Recipient addresses ─────> local comparison only; not included in the Jev payload
+Aliases ─────────────────> chrome.storage.local only
+```
 
-Capture only what Jev needs for a useful judgment:
+The local Node relay binds to `127.0.0.1`, checks the exact configured extension origin, validates payloads, strips URL paths/query strings/fragments before Jev sees link destinations, and does not log email contents. CORS origin checks are not full authentication; this service must not be exposed beyond the local development machine without real authentication and deployment hardening.
+
+## Permissions and OAuth setup
+
+The extension requires `identity` and `storage`, Gmail API and local-relay host permissions, and the OAuth scope `https://www.googleapis.com/auth/gmail.readonly`. `activeTab` and `scripting` remain for the individual-message flow. Chrome 105 or newer is required for the promise-based Identity API used here.
+
+The manifest contains a placeholder OAuth client ID. To use batch scanning, create a Google Cloud project, enable the Gmail API, configure its OAuth consent screen and test user, then create an OAuth client with application type **Chrome Extension** and the extension's ID. Replace the placeholder in `extension/manifest.json` and reload the unpacked extension. Google may show an unverified-app warning while the OAuth app is in testing. A public release using `gmail.readonly` requires Google's restricted-scope verification; transmitting restricted Gmail data to a server can also trigger a security assessment. Treat this implementation as local, personal development until those requirements are addressed.
+
+The Jev key remains a server secret in `server/.env` as `TYPESAFE_API_KEY`; never put it in the extension, manifest, or browser storage. The existing local relay is for personal development, not a multi-user production service.
+
+## Jev judgments and report calculations
+
+Each email is one structured Jev state. One TypeSafe System One request evaluates independent questions in parallel:
+
+- Four Noul phishing/social-engineering signals: sensitive information request, identity conflict, deceptive link, and coercive pressure.
+- One Score for overall phishing/social-engineering concern.
+- One Choice for primary purpose: shopping/commercial, transactional, newsletter, personal correspondence, work/service, or other.
+- One Noul estimating whether the account owner likely needs to act, respond, attend to a personal matter, or retain the message for a decision.
+
+Code, not Jev, decides who is listed in To/Cc, parses addresses and URLs, applies risk bands, and computes report percentages. The report defines “needs attention” as an importance Noul of at least 0.70. It separately reports the proportion listed in To/Cc and the intersection (“Direct + attention”). All percentage denominators are successfully Jev-analyzed messages; Gmail-fetch or Jev failures are shown separately and excluded. Purpose breakdowns and risk bands are also advisory. The 0.70 threshold and current risk-band thresholds are provisional and are not validated accuracy claims.
+
+The report does not call an email safe. A low risk band means only that the current questions and thresholds did not find strong signals in the captured portion. If text or links are truncated, coverage is marked limited. Jev receives sender, subject, body excerpt, minimized link text and hostname, and the coarse recipient relationship; the Gmail message ID, full To/Cc headers, alias list, and access token are not included in its state. URL-like text is reduced to its hostname, and URL paths, query parameters, and fragments are removed server-side before links are sent to Jev. Email excerpts can still contain sensitive text such as verification codes or personal information; the scan disclosure warns users before they opt in.
+
+## API contracts
+
+Individual check: `POST /analyze` with `{ "message": CapturedMessage }`.
+
+Batch check: `POST /analyze-batch` with `{ "messages": BatchCapturedMessage[] }`, containing 1–20 entries. The relay caps each batch message at 8,000 body characters and 12 links, evaluates at concurrency 3, and returns one indexed outcome per submitted item:
 
 ```json
 {
-  "subject": "Action required for your account",
-  "sender": { "name": "Example Support", "email": "support@example.test" },
-  "body": "Please verify your account ...",
-  "bodyTruncated": false,
-  "links": [{ "text": "Verify account", "href": "https://example.test/verify" }],
-  "linksTruncated": false
+  "results": [
+    { "index": 0, "result": {
+      "band": "review",
+      "score": 1.72,
+      "confidence": 0.68,
+      "signals": [],
+      "coverage": "complete",
+      "purpose": "work_or_service",
+      "purposeConfidence": 0.81,
+      "importanceProbability": 0.76,
+      "likelyNeedsAttention": true
+    }},
+    { "index": 1, "error": "analysis_failed" }
+  ]
 }
 ```
 
-The DOM capture bounds body text to 30,000 characters and links to 50 entries. The relay validates field types and lengths, removes URL paths, query strings, and fragments before sending link destinations to Jev, and rejects malformed messages. It does not log message bodies or URLs. The captured email and result live in popup memory; closing the popup discards them. If caching is later useful, define a short retention period and a clear user control first.
-
-The endpoint contract is `POST /analyze` with `{ "message": <the captured message> }`. It returns an application-owned response, for example:
-
-```json
-{
-  "band": "review",
-  "score": 1.72,
-  "confidence": 0.68,
-  "signals": [
-    { "id": "coercive_pressure", "label": "The message uses unusual pressure, secrecy, or instructions to bypass verification.", "probability": 0.61 }
-  ],
-  "coverage": "complete"
-}
-```
-
-The first `low`, `review`, and `high` thresholds are provisional and exist to make the end-to-end flow testable; calibrate them against labeled safe, suspicious, and ambiguous emails before release. Return an error state for unavailable analysis; a network failure must never look like a low-risk verdict. The endpoint does not expose the Jev token or raw provider error details to the popup.
-
-Gmail's DOM is not a stable public API. The selectors in `extension/content/extract-message.js` are an initial heuristic for the last expanded message in a conversation. Validate them against real Gmail layouts, multiple expanded messages, collapsed messages, dark mode, and account variants. If DOM extraction proves unreliable or full headers are needed, investigate the Gmail API and its OAuth and scope implications before replacing the capture layer.
-
-## Jev question design
-
-Send the message as structured `state` with named fields (`subject`, `sender`, `body`, `links`) and batch independent questions in one System One request. Start with narrow Noul judgments such as:
-
-- Does the message request a password, one-time code, payment detail, or account recovery action?
-- Does the sender identity or a linked destination conflict with the organization the message claims to represent?
-- Does the wording pressure the reader to act urgently, keep the request secret, or bypass normal verification?
-- Does a link's visible text imply a different destination from its actual URL?
-
-The current implementation asks four narrow Nouls and one Score question in a single Jev call. Jev returns probabilities and typed answers; it does **not** generate an explanation. Code composes a risk band and displays fixed labels for questions or deterministic checks that fired. A Noul value near 0.5 is uncertainty between yes and no, not a medium-strength warning. The current thresholds are provisional, not validated detection rates. Evaluate against labeled safe, suspicious, and ambiguous emails, including legitimate urgent mail and legitimate third-party links.
-
-Deterministic checks belong in code: URL parsing, hostname comparison, known URL schemes, and whether a visible URL disagrees with its href. Treat different sender and link domains as a signal to review, not proof of phishing; legitimate services often use distinct domains. If message text is truncated, tell Jev and surface limited coverage to the user.
-
-## Build sequence
-
-1. **Validate capture.** Test Gmail DOM extraction against varied real messages, threads, collapsed messages, and account layouts. Adjust selectors when needed.
-2. **Harden the service for deployment.** Add actual user authentication, deployment-specific endpoint configuration, secrets management, and operational monitoring before exposing the relay beyond local development.
-3. **Calibrate the model.** Build a labeled test set and evaluate false positives and false negatives. Confirm that the deployed Jev model version and all risk thresholds are fixed and documented.
-4. **Verify integration.** Exercise missing tokens, invalid requests, TypeSafe 401/422/429/529 responses, network timeouts, truncated messages, link edge cases, and service shutdown. Keep provider failures distinct from low-risk results.
-
-## Current status
-
-Implemented: loadable Manifest V3 popup, temporary tab permission, on-demand Gmail DOM capture, local relay with origin checks and request limits, server-side Jev request, provisional risk composition, and explicit scan UI.
-
-Pending: live Gmail selector validation, labeled-email evaluation, final thresholds, and production authentication/deployment.
+Each message evaluation consumes one unit from the local relay's 20-analysis-per-minute IP limit; a full 20-message scan consumes the full window. Shared TypeSafe authentication/permission/rate-limit failures stop new batch calls, and unstarted rows are returned as `not_analyzed`. This prevents a bad key or exhausted Jev quota from causing a cascade of repeated requests.
 
 ## Local test steps
 
-1. Load `extension/` unpacked in Chrome and copy the extension ID.
-2. Create `server/.env` from `.env.example`. Set `TYPESAFE_API_KEY` and `EXTENSION_ID`.
-3. From `server/`, run `npm install`, then `npm run typecheck`, then `npm run dev`.
-4. Confirm `http://127.0.0.1:8787/health` returns `{"status":"ok"}`.
-5. Reload the extension, open an email in Gmail, capture it, check the displayed sender/subject, then click **Analyze with Jev**. Confirm a band and signal list appear.
-6. Try a non-Gmail tab, a Gmail inbox without an opened message, and a long email with links. These should produce clear errors or a limited-coverage result, never a low-risk result on failure.
+1. Follow [`howtorun.md`](howtorun.md) to configure the Google OAuth client and local Jev relay.
+2. Type-check the relay with `npm run typecheck` in `server/`.
+3. Load/reload `extension/` from `chrome://extensions`; visit Gmail and click the extension icon.
+4. For the existing single-message flow, capture an expanded message, inspect the preview, then choose **Analyze with Jev**.
+5. For batch review, open **Open batch scanner**, add any owned aliases, and choose **Connect and scan latest 20**. Approve Google read-only access on first use.
+6. Confirm the connected mailbox is expected, then compare the report rows and category/To-Cc percentages with a few known messages. Check that failures appear as unavailable rather than low-risk.
+7. Verify that alias matches work for To and Cc, and that messages where you are absent from both are labeled “Not listed in To/Cc” with the Bcc/forwarding caveat.
 
-The analyze action sends captured text and link text/hostnames to TypeSafe and consumes Jev API usage. Test with messages you are comfortable sending for analysis.
+No live Jev analysis has been exercised here; it needs the user's configured Google OAuth client, Google consent, and Jev API key. Use messages whose content you are comfortable sending to TypeSafe for evaluation.
+
+## Cross-component impact and remaining work
+
+- **Manifest → scanner:** identity/storage permissions, Gmail host access, and OAuth config support the new scanner without weakening the existing active-tab capture flow.
+- **Scanner → relay:** Gmail IDs and raw recipient headers stay in the extension; the relay receives bounded content plus the computed recipient enum.
+- **Relay → Jev:** batch validation, per-email rate accounting, bounded concurrency, generic row failures, URL minimization, and server-only API credentials keep provider integration behind one local boundary.
+- **Analyzer → both UIs:** one shared response now includes risk, purpose, and attention fields; both the single-message popup and the batch report render the new judgments.
+- **Docs:** setup now covers OAuth as well as Jev; the distinction between a local personal prototype and publicly verified Gmail access is explicit.
+
+Before broader use, test MIME edge cases and the real mailbox layout; validate the recipient heuristics for aliases, Bcc, forwarding, and mailing lists; build a labeled test set to calibrate Jev questions and thresholds; and complete Google OAuth restricted-scope verification/security assessment plus proper service authentication before public distribution.
 
 ## References
 
-- [Chrome extension quick start](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world)
-- [Chrome `activeTab` permission](https://developer.chrome.com/docs/extensions/develop/concepts/activeTab)
-- [Chrome scripting API](https://developer.chrome.com/docs/extensions/reference/api/scripting)
-- [TypeSafe documentation index](https://docs.typesafe.ai/llms.txt)
-- [TypeSafe API reference](https://docs.typesafe.ai/api)
+- [Chrome Identity API](https://developer.chrome.com/docs/extensions/reference/api/identity)
+- [Chrome extension OAuth guide](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth)
+- [Gmail API `messages.list`](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list)
+- [Gmail API `messages.get`](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get)
+- [Gmail API scopes and verification](https://developers.google.com/workspace/gmail/api/auth/scopes)
 - [TypeSafe JavaScript SDK](https://docs.typesafe.ai/sdk/javascript)
-- [TypeSafe state guidance](https://docs.typesafe.ai/concepts/state)
-- [TypeSafe Noul guidance](https://docs.typesafe.ai/primitives/noul)
+- [TypeSafe state](https://docs.typesafe.ai/concepts/state)
+- [TypeSafe Choice](https://docs.typesafe.ai/primitives/choice)
+- [TypeSafe Noul](https://docs.typesafe.ai/primitives/noul)
+- [TypeSafe Score](https://docs.typesafe.ai/primitives/score)
+- [TypeSafe API reference](https://docs.typesafe.ai/api)

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inbox overview · Inbox Signal</title>
+    <link rel="stylesheet" href="scanner.css" />
+    <script src="scanner.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <a class="back-link" href="../popup/popup.html">← Inbox Signal</a>
+        <p class="eyebrow">ON-DEMAND INBOX REVIEW</p>
+        <h1>See the shape<br />of your inbox.</h1>
+        <p class="lede">Review up to the 20 newest messages in Inbox: what may need your attention, what is commercial, and whether your address appears in To or Cc.</p>
+      </header>
+
+      <section class="setup panel" aria-labelledby="setup-title">
+        <p class="section-number">01 / RECIPIENT MATCHING</p>
+        <h2 id="setup-title">Which addresses are yours?</h2>
+        <p class="muted">The Gmail account address is discovered after you connect. Add any aliases that should count as yours; these stay in this browser and are never sent to Jev.</p>
+        <div class="account-line"><span>Connected mailbox</span><strong id="mailbox">Not connected yet</strong></div>
+        <label for="aliases">Your other email addresses <span>(optional, comma or newline separated)</span></label>
+        <textarea id="aliases" rows="2" autocomplete="off" spellcheck="false" placeholder="name@example.com"></textarea>
+      </section>
+
+      <section class="privacy panel" aria-labelledby="privacy-title">
+        <p class="section-number">BEFORE YOU SCAN</p>
+        <h2 id="privacy-title">A small, deliberate read.</h2>
+        <ul>
+          <li>Only starts after you press the button below; reads at most 20 messages labeled Inbox.</li>
+          <li>Gmail access is read-only. The extension does not change, label, archive, or send mail.</li>
+          <li>Recipient matching happens locally. Jev receives only a relationship label such as “To me” or “not listed in To/Cc,” not the recipient addresses.</li>
+          <li>For analysis, message subject, sender, a text-only excerpt, and link text/hostnames go through the local relay to TypeSafe Jev. Attachments are not analyzed; URL-like text and link paths/query strings are reduced to hostnames before Jev sees them.</li>
+          <li>Email text can contain personal details, one-time codes, or other sensitive information. Scan only messages whose captured text you are comfortable sending to TypeSafe.</li>
+          <li>Messages and results are not saved by the extension. Not listed in To/Cc can also mean Bcc, forwarding, or an unlisted alias—not necessarily a misdelivery.</li>
+        </ul>
+      </section>
+
+      <section class="action panel" aria-live="polite">
+        <div class="status-row">
+          <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+          <p id="status">Ready when you are.</p>
+        </div>
+        <button id="scan" type="button">Connect and scan latest 20 <span aria-hidden="true">↗</span></button>
+        <p class="fine-print">Google will ask for Gmail read-only access the first time. Jev analysis uses your configured API account.</p>
+      </section>
+
+      <section class="report" id="report" hidden aria-labelledby="report-title">
+        <div class="report-heading">
+          <div>
+            <p class="section-number">02 / YOUR SNAPSHOT</p>
+            <h2 id="report-title">The latest messages</h2>
+          </div>
+          <span class="report-count" id="report-count"></span>
+        </div>
+        <p class="report-note" id="report-note"></p>
+
+        <div class="stat-grid" id="stat-grid"></div>
+
+        <div class="breakdown-grid">
+          <section class="breakdown panel" aria-labelledby="purpose-title">
+            <p class="section-number">JEV PURPOSE</p>
+            <h3 id="purpose-title">What these emails are about</h3>
+            <ul id="purpose-breakdown"></ul>
+          </section>
+          <section class="breakdown panel" aria-labelledby="recipient-title">
+            <p class="section-number">HEADER MATCH</p>
+            <h3 id="recipient-title">How you appear in To/Cc</h3>
+            <ul id="recipient-breakdown"></ul>
+          </section>
+        </div>
+
+        <section class="message-list" aria-labelledby="messages-title">
+          <div class="list-heading">
+            <div>
+              <p class="section-number">MESSAGE-BY-MESSAGE</p>
+              <h3 id="messages-title">Review the evidence</h3>
+            </div>
+            <p>Jev results are advisory.</p>
+          </div>
+          <div id="results"></div>
+        </section>
+      </section>
+
+      <footer><span>LOCAL PREVIEW</span><span>No mailbox changes are made</span></footer>
+    </main>
+  </body>
+</html>

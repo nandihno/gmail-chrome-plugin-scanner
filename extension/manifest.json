@@ -2,10 +2,17 @@
   "manifest_version": 3,
   "name": "Inbox Signal",
   "version": "0.1.0",
-  "description": "Review the open Gmail message with a Jev powered risk check.",
-  "minimum_chrome_version": "92",
-  "permissions": ["activeTab", "scripting"],
-  "host_permissions": ["http://127.0.0.1:8787/*"],
+  "description": "Review Gmail messages with Jev-powered risk and inbox triage.",
+  "minimum_chrome_version": "105",
+  "permissions": ["activeTab", "scripting", "identity", "storage"],
+  "host_permissions": [
+    "http://127.0.0.1:8787/*",
+    "https://gmail.googleapis.com/*"
+  ],
+  "oauth2": {
+    "client_id": "696566156205-4t40lc4ivf48c40c35dsm06brfp4pvl7.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  },
   "action": {
     "default_title": "Inbox Signal",
     "default_popup": "popup/popup.html"

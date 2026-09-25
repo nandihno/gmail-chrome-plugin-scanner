@@ -1,26 +1,43 @@
 # How to run Inbox Signal
 
-Inbox Signal runs as an unpacked Chrome extension plus a local Node.js relay. The relay sends a message to TypeSafe Jev only after you choose **Analyze with Jev** in the extension.
+Inbox Signal runs as an unpacked Chrome extension plus a local Node.js relay. It can inspect one open Gmail message, or—after one-time Google OAuth setup—review up to the latest 20 messages in Gmail's Inbox. Both flows are started by you. No messages are modified.
 
 ## Requirements
 
-- Google Chrome
+- Google Chrome 105 or newer
 - Node.js 20.6 or newer
 - A TypeSafe Jev API key
+- A Google Cloud OAuth client configured for this extension (batch scanning only)
 
-## One-time setup
-
-### 1. Load the extension and copy its ID
+## 1. Load the extension and copy its ID
 
 1. Open `chrome://extensions` in Chrome.
 2. Turn on **Developer mode**.
 3. Select **Load unpacked** and choose this project's `extension/` directory.
-4. Copy the extension ID shown on the extension card. The relay uses it to accept requests only from this extension.
+4. Copy the extension ID shown on the extension card. Keep the project in the same location so the unpacked extension ID remains the same.
 
-### 2. Configure the Jev key
+## 2. Configure Gmail read-only OAuth (batch scanner)
+
+The single-open-message feature does not need Gmail API OAuth. The batch scanner does; it needs the OAuth client ID to be placed in the manifest before the first scan.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create or select a project and enable the **Gmail API**.
+2. Configure the OAuth consent screen. For personal testing, set up the app for testing and add the Google account you will scan as a test user. Use the narrow requested scope `https://www.googleapis.com/auth/gmail.readonly`.
+3. Create an OAuth client ID with application type **Chrome Extension**. Enter the extension ID copied above as the Item ID.
+4. Copy the generated client ID (it ends in `.apps.googleusercontent.com`). In `extension/manifest.json`, replace:
+
+   ```json
+   "client_id": "REPLACE_WITH_GOOGLE_CHROME_EXTENSION_OAUTH_CLIENT_ID.apps.googleusercontent.com"
+   ```
+
+   with the generated ID. Do not put a client secret in the extension.
+5. Return to `chrome://extensions` and reload Inbox Signal. If Google shows an unverified-app warning in testing mode, confirm the selected test account and OAuth consent configuration before proceeding.
+
+Google classifies `gmail.readonly` as a restricted scope. Public distribution requires restricted-scope verification, and transmitting restricted Gmail data to a server can require a security assessment. The current project is intended as a local personal prototype; see Google's [Gmail scope requirements](https://developers.google.com/workspace/gmail/api/auth/scopes) before distributing it.
+
+## 3. Configure the Jev relay
 
 1. Copy `server/.env.example` to `server/.env`.
-2. Edit `server/.env` and set these values:
+2. Set these values:
 
    ```dotenv
    TYPESAFE_API_KEY=your_typesafe_api_key
@@ -28,60 +45,59 @@ Inbox Signal runs as an unpacked Chrome extension plus a local Node.js relay. Th
    PORT=8787
    ```
 
-Keep `server/.env` on your computer. It is ignored by Git; do not commit or share it.
+Keep `server/.env` private. It is ignored by Git. The Jev key stays in the local server; it is never bundled into the extension. The Google OAuth token stays in Chrome and is not sent to the relay.
 
-### 3. Install server dependencies
+## 4. Install and start
 
-From a terminal, run:
+From a terminal:
 
 ```sh
 cd server
 npm install
+npm run typecheck
+npm run dev
 ```
 
-## Start the relay and extension
+Leave the terminal running. The relay listens on `http://127.0.0.1:8787`. Visit `http://127.0.0.1:8787/health`; it should return:
 
-1. Start the relay from the `server/` directory:
+```json
+{"status":"ok"}
+```
 
-   ```sh
-   npm run dev
-   ```
+## Review one open message
 
-   Leave this terminal open while using the extension. The relay listens on `http://127.0.0.1:8787`.
+1. Open Gmail and expand the message you want to inspect.
+2. Click the Inbox Signal toolbar icon, then **Capture open message**.
+3. Confirm the displayed sender and subject are the ones you intended to analyze.
+4. Click **Analyze with Jev**. The popup shows phishing-risk signals, message purpose, and Jev's estimated need for attention.
 
-2. Open `http://127.0.0.1:8787/health` in Chrome. It should show:
+## Review up to 20 Inbox messages
 
-   ```json
-   {"status":"ok"}
-   ```
+1. Click the Inbox Signal icon and choose **Open batch scanner**.
+2. Optionally add any Gmail aliases that should count as yours. The extension stores those aliases locally in Chrome and does not send them to Jev.
+3. Read the disclosure, then click **Connect and scan latest 20**. On first use, choose the Google account and approve Gmail read-only access.
+4. Confirm the connected mailbox shown at the top is the account you intended to scan.
+5. Review the snapshot and message-by-message rows. Percentages use successfully analyzed messages only. “Listed in To or Cc” is a header match; “Direct + attention” combines that deterministic match with Jev's provisional 70% attention threshold.
 
-3. If you edited the extension files or manifest, return to `chrome://extensions` and press the extension's reload button.
-4. Open Gmail and select an email so its message is expanded.
-5. Click the Inbox Signal icon, then click **Capture open message**.
-6. Check that the sender and subject shown are the email you intended to inspect.
-7. Click **Analyze with Jev** to send the captured message for analysis and display the result.
+The scanner retrieves message details from Gmail, performs To/Cc matching locally, and sends only the bounded message fields plus a coarse recipient relationship to the local relay. Jev receives the email subject, sender, text excerpt, link text and destination hostnames; URL-like text and link paths/query strings are reduced to hostnames before the Jev request. Email text may still contain personal or security details, so scan only messages you are comfortable sending to TypeSafe. The scanner ignores attachments and does not save messages or results. A message not listed in To/Cc may still have arrived through Bcc, forwarding, a mailing list, or an alias you did not enter.
 
-Each analysis sends the captured subject, sender, body text, and link text/destinations to TypeSafe and uses your Jev account. Link paths and query strings are removed before link destinations are sent. The extension does not scan the inbox automatically.
+A full scan can use 20 Jev analyses and consumes the relay's full 20-analysis-per-minute allowance. The attention and risk thresholds are provisional and are not guaranteed detection rates.
 
 ## Stop the relay
 
 In the terminal running `npm run dev`, press **Ctrl+C**.
 
-## Type-check the relay
-
-From the `server/` directory, run:
-
-```sh
-npm run typecheck
-```
-
 ## Troubleshooting
 
-- **The extension says Gmail is not open:** select a Gmail tab at `mail.google.com`, then reopen the extension popup.
-- **No expanded message was found:** open the email itself, then capture it again. The current capture uses Gmail page selectors that may need updates if Gmail changes its layout.
-- **Analysis is unavailable:** check that the relay is running and `/health` returns `{"status":"ok"}`. Confirm the API key and extension ID in `server/.env`, then reload the extension.
-- **The relay exits immediately:** confirm `TYPESAFE_API_KEY` is set and `EXTENSION_ID` matches the ID shown in `chrome://extensions`.
-- **The extension ID changed:** update `EXTENSION_ID` in `server/.env` to the current ID and restart the relay.
-- **You see a limited-coverage result:** the captured message exceeded the text or link limit. Review the message manually as well.
+- **Google OAuth client is not configured:** replace the placeholder `client_id` in `extension/manifest.json`, save, and reload the extension.
+- **Google rejects or blocks consent:** check the OAuth consent screen, add the scanning account as a test user, verify the Gmail API is enabled, and confirm the Chrome Extension OAuth client uses the current extension ID. A Google Workspace administrator may also restrict third-party Gmail access.
+- **The extension ID changed:** recreate/update the Chrome Extension OAuth client with the current ID and update `EXTENSION_ID` in `server/.env`; reload the extension and restart the relay.
+- **Gmail access denied:** check that the OAuth client requests `gmail.readonly`, and that the Gmail API is enabled for the same Google Cloud project.
+- **The connected mailbox is not the intended account:** stop before reviewing results, then use Chrome's Google account chooser/sign-in to select the correct account and scan again.
+- **The relay says origin not allowed:** compare `EXTENSION_ID` in `server/.env` with the ID in `chrome://extensions`, then restart the relay.
+- **Jev analysis is unavailable:** check that the relay is running and `/health` returns `{"status":"ok"}`. Confirm the key is set in `server/.env` and is active.
+- **Some rows could not be analyzed:** a transient Jev/provider error or rate limit may have stopped the remaining batch. Check the relay terminal for error names only, wait a minute if rate-limited, and retry.
+- **Some emails appear not addressed to you:** inspect their To/Cc headers in Gmail. Bcc, forwarding, and unlisted aliases cannot be distinguished by this header-only check.
+- **You see limited coverage:** the body exceeded 8,000 characters or the link list exceeded 12 entries. The report says when this happens; inspect the full message manually.
 
-The relay is for local development and binds only to your computer. See [implementation.md](implementation.md) for the architecture, current limitations, and work required before public deployment.
+For the architecture, limitations, data boundaries, and Google OAuth requirements, see [implementation.md](implementation.md).

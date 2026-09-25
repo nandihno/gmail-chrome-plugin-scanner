@@ -1,5 +1,5 @@
-import { TypeSafeClient, noul, score } from "@typesafe-ai/sdk";
-import type { AnalysisResponse, CapturedMessage, RiskSignal } from "./types.js";
+import { TypeSafeClient, choice, noul, score } from "@typesafe-ai/sdk";
+import type { AnalysisResponse, BatchCapturedMessage, CapturedMessage, EmailPurpose, RiskSignal } from "./types.js";
 
 let client: TypeSafeClient | undefined;
 const HIGH_PROBABILITY = 0.82;
@@ -7,6 +7,17 @@ const REVIEW_PROBABILITY = 0.56;
 const HIGH_SCORE = 2.3;
 const REVIEW_SCORE = 1.15;
 const MIN_SCORE_CONFIDENCE = 0.55;
+const IMPORTANT_PROBABILITY = 0.70;
+const URL_TEXT_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"')]+|\b[a-z0-9.-]+\.[a-z]{2,}(?:[/?#][^\s<>"')]+)?/gi;
+
+const purposeOptions = {
+  shopping_commercial: "A promotion, advertisement, discount, product recommendation, or other commercial shopping solicitation.",
+  transactional: "A receipt, order or delivery update, billing notice, account notice, or other transaction-related service message.",
+  newsletter: "A recurring publication, digest, or bulk informational update that is not primarily a shopping promotion.",
+  personal_correspondence: "An individual social, family, or personal message rather than a bulk or automated notice.",
+  work_or_service: "Work, education, appointment, community, or service correspondence that is not primarily commercial shopping.",
+  other: "A message that does not clearly fit any of the categories above."
+} as const;
 
 const questions = {
   sensitive_request: noul(
@@ -45,6 +56,17 @@ const questions = {
       "There are meaningful warning signs, such as a suspicious identity claim paired with a sensitive request, a misleading link, or unusual pressure.",
       "There are strong and converging signs of phishing or social engineering, such as a deceptive identity or destination combined with credential or payment requests, urgency, or secrecy."
     ]
+  ),
+  purpose: choice(
+    "What is the primary purpose of this email? Classify the message content, not whether it is safe or whether the user should act.",
+    purposeOptions
+  ),
+  needs_attention: noul(
+    "Would the mailbox owner likely need to take a concrete action, reply, attend to a personally relevant matter, or keep this message for a specific decision? Judge the message content and the provided recipient relationship; do not equate direct addressing alone with importance.",
+    {
+      true: "The email asks for a response or action, contains a personally relevant matter needing attention, or is a specific notice the mailbox owner should act on or retain for a decision.",
+      false: "The email is general promotion, routine bulk content, or an informational message with no clear personal action or decision for the mailbox owner."
+    }
   )
 } as const;
 
@@ -71,6 +93,10 @@ function visibleHostname(text: string): string | undefined {
   }
 }
 
+function minimizeLinkText(text: string): string {
+  return text.replace(URL_TEXT_PATTERN, (candidate) => visibleHostname(candidate) || "[link]");
+}
+
 function normalizedHostname(href: string): string {
   return new URL(href).hostname.toLowerCase().replace(/^www\./, "");
 }
@@ -86,11 +112,11 @@ function rounded(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-export async function analyzeMessage(message: CapturedMessage): Promise<AnalysisResponse> {
+export async function analyzeMessage(message: CapturedMessage | BatchCapturedMessage): Promise<AnalysisResponse> {
   const safeLinks = message.links.map((link) => {
     const url = new URL(link.href);
     return {
-      text: link.text,
+      text: minimizeLinkText(link.text),
       destination: url.hostname
     };
   });
@@ -98,10 +124,11 @@ export async function analyzeMessage(message: CapturedMessage): Promise<Analysis
     email: {
       subject: message.subject,
       sender: message.sender,
-      body: message.body,
+      body: minimizeLinkText(message.body),
       body_truncated: message.bodyTruncated,
       links_truncated: message.linksTruncated,
-      links: safeLinks
+      links: safeLinks,
+      recipient_relation: "recipientRelation" in message ? message.recipientRelation : "unknown"
     }
   };
 
@@ -111,6 +138,18 @@ export async function analyzeMessage(message: CapturedMessage): Promise<Analysis
     state,
     questions
   });
+
+  const purposeAnswer = response.answers.purpose;
+  const importanceAnswer = response.answers.needs_attention;
+  const validPurposes = Object.keys(purposeOptions) as EmailPurpose[];
+  if (purposeAnswer.type !== "choice"
+    || !validPurposes.includes(purposeAnswer.choice as EmailPurpose)
+    || !Number.isFinite(purposeAnswer.confidence)
+    || purposeAnswer.confidence < 0
+    || purposeAnswer.confidence > 1) {
+    throw new Error("Unexpected Jev purpose answer");
+  }
+  const importanceProbability = getProbability(importanceAnswer, "needs_attention");
 
   const probabilities = {
     sensitiveRequest: getProbability(response.answers.sensitive_request, "sensitive_request"),
@@ -173,6 +212,10 @@ export async function analyzeMessage(message: CapturedMessage): Promise<Analysis
     score: rounded(concern.score),
     confidence: rounded(concern.confidence),
     signals,
-    coverage: message.bodyTruncated || message.linksTruncated ? "limited" : "complete"
+    coverage: message.bodyTruncated || message.linksTruncated ? "limited" : "complete",
+    purpose: purposeAnswer.choice as EmailPurpose,
+    purposeConfidence: rounded(purposeAnswer.confidence),
+    importanceProbability: rounded(importanceProbability),
+    likelyNeedsAttention: importanceProbability >= IMPORTANT_PROBABILITY
   };
 }

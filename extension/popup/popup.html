@@ -31,6 +31,12 @@
         <button id="capture" type="button" disabled>Capture open message <span aria-hidden="true">↗</span></button>
       </section>
 
+      <section class="batch-entry">
+        <p class="section-number">INBOX OVERVIEW</p>
+        <p>Want a snapshot of the latest 20 Inbox emails instead?</p>
+        <button id="open-batch" class="secondary-button" type="button">Open batch scanner <span aria-hidden="true">↗</span></button>
+      </section>
+
       <section class="message" id="message" hidden aria-labelledby="message-title">
         <p class="section-number">MESSAGE FOUND</p>
         <h2 id="message-title"></h2>
@@ -50,6 +56,7 @@
         </div>
         <h2 id="assessment-title"></h2>
         <p class="coverage" id="coverage"></p>
+        <p class="triage-summary" id="triage-summary"></p>
         <ul id="signals"></ul>
       </section>
 

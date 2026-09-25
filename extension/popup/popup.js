@@ -5,9 +5,14 @@ const messageSection = document.getElementById("message");
 const analyzeButton = document.getElementById("analyze");
 const assessmentSection = document.getElementById("assessment");
 const ANALYSIS_ENDPOINT = "http://127.0.0.1:8787/analyze";
+const batchButton = document.getElementById("open-batch");
 
 let gmailTabId = null;
 let capturedMessage = null;
+
+batchButton.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("scanner/scanner.html") });
+});
 
 function setStatus(text, state = "") {
   statusText.textContent = text;
@@ -82,6 +87,9 @@ function renderAssessment(result) {
   const validBands = ["low", "review", "high"];
   if (!validBands.includes(result?.band)
     || !["complete", "limited"].includes(result?.coverage)
+    || typeof result?.purpose !== "string"
+    || typeof result?.purposeConfidence !== "number"
+    || typeof result?.importanceProbability !== "number"
     || !Array.isArray(result?.signals)
     || result.signals.some((signal) => typeof signal?.label !== "string"
       || (signal.probability !== undefined
@@ -104,6 +112,15 @@ function renderAssessment(result) {
   coverage.textContent = result.coverage === "limited"
     ? "The message capture was incomplete, so this assessment covers only the captured portion."
     : "This is a judgment about the captured content, not a guarantee that the email is safe.";
+  const purposeLabels = {
+    shopping_commercial: "Shopping / commercial",
+    transactional: "Transactional / account notice",
+    newsletter: "Newsletter / digest",
+    personal_correspondence: "Personal correspondence",
+    work_or_service: "Work / service",
+    other: "Other"
+  };
+  document.getElementById("triage-summary").textContent = `Purpose: ${purposeLabels[result.purpose] || "Other"}. Needs-attention likelihood: ${Math.round(result.importanceProbability * 100)}% (provisional display threshold: 70%). Recipient headers are not available in this single-message capture.`;
   signalList.replaceChildren();
 
   if (result.signals.length === 0) {

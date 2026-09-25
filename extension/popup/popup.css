@@ -92,6 +92,12 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .privacy-note { margin: 12px 0; color: #536763; font-size: 11px; line-height: 1.45; }
 .message button[hidden] { display: none; }
 
+.batch-entry { margin-top: 23px; padding-top: 20px; border-top: 1px solid #c7d3cb; }
+.batch-entry .section-number { margin-bottom: 8px; }
+.batch-entry > p:not(.section-number) { margin: 0 0 12px; color: #536763; font-size: 12px; line-height: 1.45; }
+.secondary-button { min-height: 38px; border: 1px solid #aabbb0; background: transparent; color: #153e38; }
+.secondary-button:hover:not(:disabled), .secondary-button:focus-visible:not(:disabled) { background: #e5ede7; }
+
 .assessment { margin-top: 23px; padding: 17px; border: 1px solid #c7d3cb; border-radius: 12px; background: #fffefa; }
 .assessment-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .assessment-heading .section-number { margin-bottom: 0; }
@@ -101,6 +107,7 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .risk-band.review { background: #f7ebc9; color: #76510b; }
 .risk-band.high { background: #f5ded6; color: #8b3022; }
 .coverage { margin: 0; color: #536763; font-size: 11px; line-height: 1.45; }
+.triage-summary { margin: 10px 0 0; padding: 10px 11px; border-radius: 7px; background: #edf2eb; color: #34574e; font-size: 11px; line-height: 1.5; }
 .assessment ul { display: grid; gap: 9px; margin: 14px 0 0; padding: 0; list-style: none; }
 .assessment li { padding-left: 12px; border-left: 2px solid #b45536; font-size: 12px; line-height: 1.45; }
 .assessment li span { display: block; margin-top: 2px; color: #6b8178; font-size: 10px; }

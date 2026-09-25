@@ -1,4 +1,4 @@
-import type { CapturedLink, CapturedMessage } from "./types.js";
+import type { BatchCapturedMessage, CapturedLink, CapturedMessage, RecipientRelation } from "./types.js";
 
 export class RequestValidationError extends Error {
   constructor(message: string) {
@@ -60,4 +60,26 @@ export function validateCapturedMessage(value: unknown): CapturedMessage {
     links: value.links.map(readLink),
     linksTruncated: value.linksTruncated
   };
+}
+
+const RECIPIENT_RELATIONS = new Set<RecipientRelation>(["to_me", "cc_me", "not_listed", "unclear"]);
+
+export function validateBatchCapturedMessage(value: unknown, index: number): BatchCapturedMessage {
+  if (!record(value) || !RECIPIENT_RELATIONS.has(value.recipientRelation as RecipientRelation)) {
+    throw new RequestValidationError(`Invalid recipient relation for message ${index}`);
+  }
+
+  const message = validateCapturedMessage(value);
+  if (message.body.length > 8_000 || message.links.length > 12) {
+    throw new RequestValidationError(`Batch message ${index} exceeds capture limits`);
+  }
+
+  return { ...message, recipientRelation: value.recipientRelation as RecipientRelation };
+}
+
+export function validateBatchMessages(value: unknown): BatchCapturedMessage[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20) {
+    throw new RequestValidationError("Batch must contain between 1 and 20 messages");
+  }
+  return value.map((message, index) => validateBatchCapturedMessage(message, index));
 }

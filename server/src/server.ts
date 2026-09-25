@@ -1,14 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { TypeSafeError } from "@typesafe-ai/sdk";
 import { analyzeMessage } from "./analyzer.js";
-import { RequestValidationError, validateCapturedMessage } from "./validation.js";
+import { RequestValidationError, validateBatchMessages, validateCapturedMessage } from "./validation.js";
+import type { BatchAnalysisResult, BatchCapturedMessage } from "./types.js";
 
 const PORT = Number(process.env.PORT || "8787");
 const EXTENSION_ID = process.env.EXTENSION_ID || "";
 const TYPESAFE_API_KEY = process.env.TYPESAFE_API_KEY || "";
-const MAX_BODY_BYTES = 100_000;
+const MAX_BODY_BYTES = 1_500_000;
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT = 20;
+const BATCH_CONCURRENCY = 3;
 const rateBuckets = new Map<string, { count: number; resetsAt: number }>();
 
 if (!TYPESAFE_API_KEY.trim()) {
@@ -44,18 +46,53 @@ function allowOrigin(request: IncomingMessage, response: ServerResponse): boolea
   return true;
 }
 
-function withinRateLimit(request: IncomingMessage): boolean {
+function withinRateLimit(request: IncomingMessage, cost: number): boolean {
   const key = request.socket.remoteAddress || "local";
   const now = Date.now();
   const current = rateBuckets.get(key);
 
   if (!current || current.resetsAt <= now) {
-    rateBuckets.set(key, { count: 1, resetsAt: now + RATE_WINDOW_MS });
+    rateBuckets.set(key, { count: cost, resetsAt: now + RATE_WINDOW_MS });
     return true;
   }
-  if (current.count >= RATE_LIMIT) return false;
-  current.count += 1;
+  if (current.count + cost > RATE_LIMIT) return false;
+  current.count += cost;
   return true;
+}
+
+function shouldStopBatch(error: unknown): boolean {
+  if (!(error instanceof TypeSafeError) || !("status" in error)) return false;
+  const status = Number(error.status);
+  return status === 401 || status === 403 || status === 429;
+}
+
+async function analyzeBatch(messages: BatchCapturedMessage[]): Promise<BatchAnalysisResult[]> {
+  const results: Array<BatchAnalysisResult | undefined> = new Array(messages.length);
+  let nextIndex = 0;
+  let stopStartingRequests = false;
+
+  async function worker(): Promise<void> {
+    while (!stopStartingRequests) {
+      const index = nextIndex++;
+      if (index >= messages.length) return;
+
+      try {
+        results[index] = { index, result: await analyzeMessage(messages[index]) };
+      } catch (error) {
+        results[index] = { index, error: "analysis_failed" };
+        if (shouldStopBatch(error)) stopStartingRequests = true;
+        const errorName = error instanceof Error ? error.name : "UnknownError";
+        console.error(`TypeSafe batch item ${index + 1} failed:`, errorName);
+      }
+    }
+  }
+
+  await Promise.all(Array.from(
+    { length: Math.min(BATCH_CONCURRENCY, messages.length) },
+    () => worker()
+  ));
+
+  return results.map((result, index) => result ?? { index, error: "not_analyzed" });
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {
@@ -86,7 +123,7 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (url.pathname !== "/analyze") {
+  if (url.pathname !== "/analyze" && url.pathname !== "/analyze-batch") {
     sendJson(response, 404, { error: "not_found" });
     return;
   }
@@ -118,19 +155,32 @@ const server = createServer(async (request, response) => {
     sendJson(response, 415, { error: "content_type_must_be_json" });
     return;
   }
-  if (!withinRateLimit(request)) {
-    sendJson(response, 429, { error: "rate_limited" });
-    return;
-  }
-
   try {
     const payload = await readJson(request);
-    if (typeof payload !== "object" || payload === null || !("message" in payload)) {
-      throw new RequestValidationError("Expected a message field");
+
+    if (url.pathname === "/analyze") {
+      if (typeof payload !== "object" || payload === null || !("message" in payload)) {
+        throw new RequestValidationError("Expected a message field");
+      }
+      const message = validateCapturedMessage(payload.message);
+      if (!withinRateLimit(request, 1)) {
+        sendJson(response, 429, { error: "rate_limited" });
+        return;
+      }
+      const result = await analyzeMessage(message);
+      sendJson(response, 200, result);
+      return;
     }
-    const message = validateCapturedMessage(payload.message);
-    const result = await analyzeMessage(message);
-    sendJson(response, 200, result);
+
+    if (typeof payload !== "object" || payload === null || !("messages" in payload)) {
+      throw new RequestValidationError("Expected a messages field");
+    }
+    const messages = validateBatchMessages(payload.messages);
+    if (!withinRateLimit(request, messages.length)) {
+      sendJson(response, 429, { error: "rate_limited" });
+      return;
+    }
+    sendJson(response, 200, { results: await analyzeBatch(messages) });
   } catch (error) {
     if (error instanceof RequestValidationError) {
       sendJson(response, 400, { error: "invalid_request" });
