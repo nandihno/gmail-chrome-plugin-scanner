@@ -1,4 +1,8 @@
-import { applySuggestedGmailLabels, suggestedLabelNames } from "./gmail-labels.mjs";
+import {
+  applySuggestedGmailLabels,
+  INBOX_SIGNAL_LABEL_NAMES,
+  suggestedLabelNames
+} from "./gmail-labels.mjs";
 
 const ANALYSIS_ENDPOINT = "http://127.0.0.1:8787/analyze-batch";
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
@@ -32,6 +36,7 @@ const results = document.getElementById("results");
 const labelSelectionCount = document.getElementById("label-selection-count");
 const labelActionStatus = document.getElementById("label-action-status");
 const applyLabelsButton = document.getElementById("apply-labels");
+const selectAllLabelsCheckbox = document.getElementById("select-all-labels");
 
 let reportRows = [];
 let selectedMessageIds = new Set();
@@ -191,7 +196,7 @@ async function gmailRequest(path, token) {
   return response.json();
 }
 
-async function mapWithConcurrency(items, limit, mapper) {
+async function mapWithConcurrency(items, limit, mapper, progressLabel = "Reading message") {
   const output = new Array(items.length);
   let next = 0;
   let completed = 0;
@@ -205,11 +210,103 @@ async function mapWithConcurrency(items, limit, mapper) {
         output[index] = { id: items[index].id, fetchError: true };
       }
       completed += 1;
-      setStatus(`Reading message ${completed} of ${items.length} from Gmail…`);
+      setStatus(`${progressLabel} ${completed} of ${items.length}…`);
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
   return output;
+}
+
+async function getInboxSignalLabelIds(token) {
+  const payload = await gmailRequest("/labels", token);
+  if (!Array.isArray(payload?.labels)) throw new Error("gmail_labels_unavailable");
+
+  const signalNames = new Set(INBOX_SIGNAL_LABEL_NAMES);
+  return new Set(payload.labels
+    .filter((label) => signalNames.has(label?.name) && typeof label?.id === "string")
+    .map((label) => label.id));
+}
+
+async function listEligibleInboxMessages(token, ownedAddresses, inboxSignalLabelIds) {
+  const rows = [];
+  let pageToken;
+
+  while (rows.length < MAX_MESSAGES) {
+    const query = new URLSearchParams({
+      labelIds: "INBOX",
+      maxResults: String(MAX_MESSAGES)
+    });
+    if (pageToken) query.set("pageToken", pageToken);
+
+    const list = await gmailRequest(`/messages?${query.toString()}`, token);
+    const references = list.messages || [];
+    if (references.length === 0) break;
+
+    const uniqueThreads = [...new Map(references.map((reference) => {
+      const key = reference.threadId
+        ? `thread:${reference.threadId}`
+        : `message:${reference.id}`;
+      return [key, { id: key, reference }];
+    })).values()];
+    const labelChecks = await mapWithConcurrency(uniqueThreads, 4, async ({ id, reference }) => {
+      if (reference.threadId) {
+        const thread = await gmailRequest(
+          `/threads/${encodeURIComponent(reference.threadId)}?format=minimal`,
+          token
+        );
+        if (!Array.isArray(thread.messages)) throw new Error("gmail_thread_metadata_unavailable");
+        return {
+          id,
+          alreadyCategorised: thread.messages.some((message) =>
+            message.labelIds?.some((labelId) => inboxSignalLabelIds.has(labelId))
+          )
+        };
+      }
+
+      const message = await gmailRequest(
+        `/messages/${encodeURIComponent(reference.id)}?format=minimal`,
+        token
+      );
+      return {
+        id,
+        alreadyCategorised: message.labelIds?.some((labelId) => inboxSignalLabelIds.has(labelId)) || false
+      };
+    }, "Checking Inbox labels");
+    const labelStateByThread = new Map(labelChecks.map((check) => [check?.id, check]));
+    const candidates = references.map((reference) => {
+      const key = reference.threadId
+        ? `thread:${reference.threadId}`
+        : `message:${reference.id}`;
+      return { reference, labelState: labelStateByThread.get(key) };
+    }).filter(({ labelState }) => !labelState?.alreadyCategorised);
+
+    let candidateIndex = 0;
+    while (candidateIndex < candidates.length && rows.length < MAX_MESSAGES) {
+      const page = candidates.slice(candidateIndex, candidateIndex + (MAX_MESSAGES - rows.length));
+      const readableCandidates = page
+        .filter(({ labelState }) => !labelState?.fetchError)
+        .map(({ reference }) => reference);
+      const messageRows = await mapWithConcurrency(readableCandidates, 4, async (reference) => {
+        const message = await gmailRequest(
+          `/messages/${encodeURIComponent(reference.id)}?format=full`,
+          token
+        );
+        return parseGmailMessage(message, ownedAddresses);
+      }, "Reading eligible message");
+      const messageRowById = new Map(messageRows.map((row) => [row.id, row]));
+      for (const { reference, labelState } of page) {
+        rows.push(labelState?.fetchError
+          ? { id: reference.id, fetchError: true }
+          : messageRowById.get(reference.id));
+      }
+      candidateIndex += page.length;
+    }
+
+    pageToken = list.nextPageToken;
+    if (!pageToken) break;
+  }
+
+  return rows;
 }
 
 function createStat(label, value, detail) {
@@ -318,7 +415,7 @@ function renderEmailRow(row, rowIndex) {
 
     const summary = document.createElement("p");
     summary.className = "email-summary";
-    summary.textContent = `Needs-attention likelihood: ${Math.round(row.analysis.importanceProbability * 100)}% ("likely" at 70% or above). `;
+    summary.textContent = `Jev risk-score confidence: ${Math.round(row.analysis.confidence * 100)}% (manual review below 55%). Needs-attention likelihood: ${Math.round(row.analysis.importanceProbability * 100)}% ("likely" at 70% or above). `;
     const assessment = document.createElement("strong");
     assessment.textContent = row.analysis.likelyNeedsAttention ? "Likely needs attention." : "No clear action identified.";
     summary.append(assessment);
@@ -413,26 +510,48 @@ function renderReport(rows, listedCount) {
   report.hidden = false;
 }
 
-function selectedRowsForLabeling() {
+function rowsAvailableForLabeling() {
   return reportRows.filter((row) => row.id
-    && selectedMessageIds.has(row.id)
     && row.labelSuggestions?.length
     && row.labelStatus !== "applied");
 }
 
+function selectedRowsForLabeling() {
+  return rowsAvailableForLabeling().filter((row) => selectedMessageIds.has(row.id));
+}
+
 function updateLabelControls() {
+  const availableRows = rowsAvailableForLabeling();
   const selectedRows = selectedRowsForLabeling();
   const suggestedCount = selectedRows.reduce((count, row) => count + row.labelSuggestions.length, 0);
-  labelSelectionCount.textContent = selectedRows.length
-    ? `${selectedRows.length} message${selectedRows.length === 1 ? "" : "s"} selected · ${suggestedCount} label${suggestedCount === 1 ? "" : "s"} will be added`
-    : "No messages selected.";
+  labelSelectionCount.textContent = availableRows.length
+    ? selectedRows.length
+      ? `${selectedRows.length} of ${availableRows.length} eligible message${availableRows.length === 1 ? "" : "s"} selected · ${suggestedCount} label${suggestedCount === 1 ? "" : "s"} will be added`
+      : `${availableRows.length} message${availableRows.length === 1 ? " has" : "s have"} suggested labels; none selected.`
+    : "No unapplied messages with suggested labels.";
   applyLabelsButton.disabled = labelOperationInProgress || selectedRows.length === 0;
+  selectAllLabelsCheckbox.disabled = labelOperationInProgress || availableRows.length === 0;
+  selectAllLabelsCheckbox.checked = availableRows.length > 0 && selectedRows.length === availableRows.length;
+  selectAllLabelsCheckbox.indeterminate = selectedRows.length > 0 && selectedRows.length < availableRows.length;
 
   for (const checkbox of results.querySelectorAll(".label-choice input")) {
     const row = reportRows.find((candidate) => candidate.id === checkbox.closest("article")?.dataset.messageId);
     checkbox.disabled = labelOperationInProgress || row?.labelStatus === "applied";
   }
 }
+
+selectAllLabelsCheckbox.addEventListener("change", () => {
+  const availableRows = rowsAvailableForLabeling();
+  for (const row of availableRows) {
+    if (selectAllLabelsCheckbox.checked) selectedMessageIds.add(row.id);
+    else selectedMessageIds.delete(row.id);
+  }
+  for (const checkbox of results.querySelectorAll(".label-choice input")) {
+    const row = reportRows.find((candidate) => candidate.id === checkbox.closest("article")?.dataset.messageId);
+    if (row) checkbox.checked = selectedMessageIds.has(row.id);
+  }
+  updateLabelControls();
+});
 
 function formatLabelError(error) {
   switch (error?.code || error?.message) {
@@ -553,6 +672,8 @@ function formatScanError(error) {
       return "Google's access token was rejected. Try scanning again to refresh authorization.";
     case "gmail_access_denied":
       return "Gmail access was denied. Confirm the Gmail API is enabled, gmail.readonly is configured, and this account approved access.";
+    case "gmail_labels_unavailable":
+      return "Inbox Signal couldn't check Gmail labels. Confirm read-only Gmail access and retry.";
     case "gmail_network_error":
     case "gmail_request_failed":
       return "Could not retrieve the Gmail messages. Check your connection and retry.";
@@ -574,31 +695,23 @@ scanButton.addEventListener("click", async () => {
     const token = await getAccessToken();
     await chrome.storage.local.set({ recipientAliases: aliases });
 
-    setStatus("Finding the newest Inbox messages…");
-    const query = new URLSearchParams({ labelIds: "INBOX", maxResults: String(MAX_MESSAGES) });
-    const [profile, list] = await Promise.all([
+    setStatus("Finding the newest uncategorised Inbox messages…");
+    const [profile, inboxSignalLabelIds] = await Promise.all([
       gmailRequest("/profile", token),
-      gmailRequest(`/messages?${query.toString()}`, token)
+      getInboxSignalLabelIds(token)
     ]);
     const primaryAddress = normalizedAddress(profile.emailAddress || "");
     if (!primaryAddress) throw new Error("gmail_profile_unavailable");
     mailboxText.textContent = primaryAddress;
     const ownedAddresses = new Set([primaryAddress, ...aliases]);
-    const messageRefs = (list.messages || []).slice(0, MAX_MESSAGES);
-    listedCount = messageRefs.length;
+    rows = await listEligibleInboxMessages(token, ownedAddresses, inboxSignalLabelIds);
+    listedCount = rows.length;
 
-    if (messageRefs.length === 0) {
-      rows = [];
+    if (rows.length === 0) {
       renderReport(rows, 0);
-      setStatus("Inbox has no messages to review.", "ready");
+      setStatus("No uncategorised Inbox messages are ready to review.", "ready");
       return;
     }
-
-    setStatus(`Reading ${messageRefs.length} message${messageRefs.length === 1 ? "" : "s"} from Gmail…`);
-    rows = await mapWithConcurrency(messageRefs, 4, async (reference) => {
-      const message = await gmailRequest(`/messages/${encodeURIComponent(reference.id)}?format=full`, token);
-      return parseGmailMessage(message, ownedAddresses);
-    });
 
     const submitted = [];
     rows.forEach((row, rowIndex) => {

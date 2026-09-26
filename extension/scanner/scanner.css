@@ -103,6 +103,7 @@ button span { font-size: 18px; font-weight: 400; }
 .label-proposal { margin-top: 14px; padding-top: 12px; border-top: 1px solid #e1e7e0; }
 .label-choice { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 11px; line-height: 1.45; }
 .label-choice input { flex: none; width: 15px; height: 15px; margin: 0; accent-color: #245b51; }
+.select-all-control { align-items: center; width: max-content; max-width: 100%; margin-top: 12px; cursor: pointer; }
 .suggested-labels { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .tag.suggested { background: #e3ede6; color: #245b43; letter-spacing: 0; text-transform: none; }
 .label-result-status { margin: 8px 0 0; color: #245b43; font-size: 10px; line-height: 1.45; }

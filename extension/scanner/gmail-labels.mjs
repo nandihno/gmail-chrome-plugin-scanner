@@ -11,6 +11,12 @@ const PURPOSE_LABELS = Object.freeze({
 const ATTENTION_LABEL = "Inbox Signal - Likely Important";
 const RECIPIENT_LABEL = "Inbox Signal - Not Listed in To-Cc";
 const RISK_LABEL = "Inbox Signal - Risk Review";
+export const INBOX_SIGNAL_LABEL_NAMES = Object.freeze([
+  ...Object.values(PURPOSE_LABELS),
+  ATTENTION_LABEL,
+  RECIPIENT_LABEL,
+  RISK_LABEL
+]);
 
 export class GmailLabelError extends Error {
   constructor(code, status) {

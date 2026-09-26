@@ -10,7 +10,7 @@
     "https://gmail.googleapis.com/*"
   ],
   "oauth2": {
-    "client_id": "696566156205-4t40lc4ivf48c40c35dsm06brfp4pvl7.apps.googleusercontent.com",
+    "client_id": "696566156205-kc49033c44e6qhk4v4tg2ttvioinefhb.apps.googleusercontent.com",
     "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
   },
   "action": {
