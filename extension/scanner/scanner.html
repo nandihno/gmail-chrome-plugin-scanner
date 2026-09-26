@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inbox overview · Inbox Signal</title>
     <link rel="stylesheet" href="scanner.css" />
-    <script src="scanner.js" defer></script>
+    <script type="module" src="scanner.js"></script>
   </head>
   <body>
     <main class="shell">
@@ -30,7 +30,8 @@
         <h2 id="privacy-title">A small, deliberate read.</h2>
         <ul>
           <li>Only starts after you press the button below; reads at most 20 messages labeled Inbox.</li>
-          <li>Gmail access is read-only. The extension does not change, label, archive, or send mail.</li>
+          <li>Scanning and Jev analysis do not change Gmail. Only after you select messages and click <strong>Apply selected labels</strong> will the extension create missing Inbox Signal labels and add them to those messages.</li>
+          <li>Scanning requests Gmail read-only access. Applying labels separately requests Google's broader <code>gmail.modify</code> permission, which may be described as allowing read, compose, and send access. Inbox Signal uses that extra permission only to create/apply selected labels; it does not compose or send email.</li>
           <li>Recipient matching happens locally. Jev receives only a relationship label such as “To me” or “not listed in To/Cc,” not the recipient addresses.</li>
           <li>For analysis, message subject, sender, a text-only excerpt, and link text/hostnames go through the local relay to TypeSafe Jev. Attachments are not analyzed; URL-like text and link paths/query strings are reduced to hostnames before Jev sees them.</li>
           <li>Email text can contain personal details, one-time codes, or other sensitive information. Scan only messages whose captured text you are comfortable sending to TypeSafe.</li>
@@ -44,7 +45,7 @@
           <p id="status">Ready when you are.</p>
         </div>
         <button id="scan" type="button">Connect and scan latest 20 <span aria-hidden="true">↗</span></button>
-        <p class="fine-print">Google will ask for Gmail read-only access the first time. Jev analysis uses your configured API account.</p>
+        <p class="fine-print">Scanning asks for read-only access; applying selected labels will separately request broader Gmail modification access. Jev analysis uses your configured API account.</p>
       </section>
 
       <section class="report" id="report" hidden aria-labelledby="report-title">
@@ -72,6 +73,18 @@
           </section>
         </div>
 
+        <section class="label-actions panel" aria-labelledby="label-actions-title">
+          <div>
+            <p class="section-number">OPTIONAL GMAIL CHANGE</p>
+            <h3 id="label-actions-title">Apply suggested labels</h3>
+            <p class="label-explanation">Select analyzed messages in the list below to review their suggested labels. Nothing changes in Gmail until you click the button. Existing labels are only added to; none are removed.</p>
+            <p class="label-caveat">“Not listed in To/Cc” is a header observation, not proof of a misdelivery; Bcc, forwarding, mailing lists, and aliases can explain it. “Risk review” is advisory, not a confirmed phishing verdict.</p>
+          </div>
+          <p id="label-selection-count" class="label-selection-count" aria-live="polite">No messages selected.</p>
+          <p id="label-action-status" class="label-action-status" role="status" aria-live="polite">No labels have been applied.</p>
+          <button id="apply-labels" type="button" disabled>Apply selected labels</button>
+        </section>
+
         <section class="message-list" aria-labelledby="messages-title">
           <div class="list-heading">
             <div>
@@ -84,7 +97,7 @@
         </section>
       </section>
 
-      <footer><span>LOCAL PREVIEW</span><span>No mailbox changes are made</span></footer>
+      <footer><span>LOCAL PREVIEW</span><span>No changes until you apply selected labels</span></footer>
     </main>
   </body>
 </html>

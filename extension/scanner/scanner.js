@@ -1,5 +1,8 @@
+import { applySuggestedGmailLabels, suggestedLabelNames } from "./gmail-labels.mjs";
+
 const ANALYSIS_ENDPOINT = "http://127.0.0.1:8787/analyze-batch";
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
+const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 const MAX_MESSAGES = 20;
 const MAX_BODY_LENGTH = 8_000;
 const MAX_LINKS = 12;
@@ -25,6 +28,14 @@ const statusDot = document.getElementById("status-dot");
 const aliasesInput = document.getElementById("aliases");
 const mailboxText = document.getElementById("mailbox");
 const report = document.getElementById("report");
+const results = document.getElementById("results");
+const labelSelectionCount = document.getElementById("label-selection-count");
+const labelActionStatus = document.getElementById("label-action-status");
+const applyLabelsButton = document.getElementById("apply-labels");
+
+let reportRows = [];
+let selectedMessageIds = new Set();
+let labelOperationInProgress = false;
 
 function setStatus(text, state = "") {
   statusText.textContent = text;
@@ -145,16 +156,22 @@ function parseGmailMessage(message, ownedAddresses) {
   };
 }
 
-async function getAccessToken() {
+async function getAccessToken(scopes) {
   const clientId = chrome.runtime.getManifest().oauth2?.client_id || "";
   if (clientId.startsWith("REPLACE_WITH_")) throw new Error("oauth_not_configured");
   let auth;
   try {
-    auth = await chrome.identity.getAuthToken({ interactive: true });
+    const options = { interactive: true };
+    if (Array.isArray(scopes)) options.scopes = scopes;
+    auth = await chrome.identity.getAuthToken(options);
   } catch {
     throw new Error("google_auth_failed");
   }
   if (!auth?.token) throw new Error("google_auth_failed");
+  if (Array.isArray(auth.grantedScopes) && Array.isArray(scopes)
+    && scopes.some((scope) => !auth.grantedScopes.includes(scope))) {
+    throw new Error("gmail_scope_not_granted");
+  }
   return auth.token;
 }
 
@@ -232,9 +249,47 @@ function appendTag(parent, label, className = "") {
   parent.append(tag);
 }
 
-function renderEmailRow(row) {
+function renderLabelProposal(row, rowIndex) {
+  const proposal = document.createElement("div");
+  proposal.className = "label-proposal";
+  const choice = document.createElement("label");
+  choice.className = "label-choice";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.id = `label-message-${rowIndex}`;
+  checkbox.checked = selectedMessageIds.has(row.id);
+  checkbox.disabled = labelOperationInProgress || row.labelStatus === "applied";
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) selectedMessageIds.add(row.id);
+    else selectedMessageIds.delete(row.id);
+    updateLabelControls();
+  });
+  const choiceText = document.createElement("span");
+  choiceText.textContent = `Select this message · ${row.labelSuggestions.length} suggested label${row.labelSuggestions.length === 1 ? "" : "s"}`;
+  choice.append(checkbox, choiceText);
+  proposal.append(choice);
+
+  const suggestions = document.createElement("div");
+  suggestions.className = "suggested-labels";
+  for (const name of row.labelSuggestions) appendTag(suggestions, name, "suggested");
+  proposal.append(suggestions);
+
+  const actionResult = document.createElement("p");
+  actionResult.className = `label-result-status ${row.labelStatus === "failed" ? "error" : ""}`.trim();
+  actionResult.dataset.labelStatusFor = row.id;
+  actionResult.textContent = row.labelStatus === "applied"
+    ? "Labels applied to this message."
+    : row.labelStatus === "failed"
+      ? formatLabelError({ code: row.labelError })
+      : "";
+  proposal.append(actionResult);
+  return proposal;
+}
+
+function renderEmailRow(row, rowIndex) {
   const article = document.createElement("article");
   article.className = `email-row ${row.analysis ? "" : "failed"}`.trim();
+  if (row.id) article.dataset.messageId = row.id;
   const top = document.createElement("div");
   top.className = "email-top";
   const title = document.createElement("div");
@@ -291,6 +346,10 @@ function renderEmailRow(row) {
     article.append(problem);
   }
 
+  if (row.analysis && row.labelSuggestions?.length) {
+    article.append(renderLabelProposal(row, rowIndex));
+  }
+
   if (row.id) {
     const open = document.createElement("a");
     open.className = "email-link";
@@ -304,6 +363,10 @@ function renderEmailRow(row) {
 }
 
 function renderReport(rows, listedCount) {
+  reportRows = rows;
+  selectedMessageIds.clear();
+  for (const row of reportRows) row.labelSuggestions = suggestedLabelNames(row);
+
   const analyzed = rows.filter((row) => row.analysis);
   const total = analyzed.length;
   const attention = analyzed.filter((row) => row.analysis.likelyNeedsAttention).length;
@@ -341,9 +404,143 @@ function renderReport(rows, listedCount) {
     total
   );
 
-  const results = document.getElementById("results");
+  labelActionStatus.textContent = total
+    ? "No labels have been applied. Select analyzed messages below to review and apply their suggestions."
+    : "No labels can be suggested until a message is analyzed.";
+  labelActionStatus.classList.remove("error");
   results.replaceChildren(...rows.map(renderEmailRow));
+  updateLabelControls();
   report.hidden = false;
+}
+
+function selectedRowsForLabeling() {
+  return reportRows.filter((row) => row.id
+    && selectedMessageIds.has(row.id)
+    && row.labelSuggestions?.length
+    && row.labelStatus !== "applied");
+}
+
+function updateLabelControls() {
+  const selectedRows = selectedRowsForLabeling();
+  const suggestedCount = selectedRows.reduce((count, row) => count + row.labelSuggestions.length, 0);
+  labelSelectionCount.textContent = selectedRows.length
+    ? `${selectedRows.length} message${selectedRows.length === 1 ? "" : "s"} selected · ${suggestedCount} label${suggestedCount === 1 ? "" : "s"} will be added`
+    : "No messages selected.";
+  applyLabelsButton.disabled = labelOperationInProgress || selectedRows.length === 0;
+
+  for (const checkbox of results.querySelectorAll(".label-choice input")) {
+    const row = reportRows.find((candidate) => candidate.id === checkbox.closest("article")?.dataset.messageId);
+    checkbox.disabled = labelOperationInProgress || row?.labelStatus === "applied";
+  }
+}
+
+function formatLabelError(error) {
+  switch (error?.code || error?.message) {
+    case "google_auth_failed":
+      return "Google authorization did not complete. Click Apply again and approve the Gmail access request.";
+    case "google_auth_expired":
+      return "Google rejected the access token. Click Apply again to request fresh authorization.";
+    case "gmail_modify_access_denied":
+      return "Google denied label editing. Confirm gmail.modify is configured in Google Auth Platform and approved for this account.";
+    case "gmail_scope_not_granted":
+      return "Gmail label permission was not granted. Click Apply again and approve the additional Gmail access request.";
+    case "gmail_label_network_error":
+      return "Could not reach Gmail to apply labels. Check your connection and retry.";
+    case "gmail_label_response_invalid":
+      return "Gmail returned an unexpected label response. No further labels were applied.";
+    default:
+      return "Gmail could not apply some labels. Check the affected rows and retry if needed.";
+  }
+}
+
+function syncLabelRowStatus(row) {
+  const article = [...results.querySelectorAll(".email-row[data-message-id]")]
+    .find((candidate) => candidate.dataset.messageId === row.id);
+  if (!article) return;
+  const checkbox = article.querySelector(".label-choice input");
+  const status = article.querySelector(".label-result-status");
+  if (checkbox) {
+    checkbox.checked = selectedMessageIds.has(row.id);
+    checkbox.disabled = labelOperationInProgress || row.labelStatus === "applied";
+  }
+  if (status) {
+    status.classList.toggle("error", row.labelStatus === "failed");
+    status.textContent = row.labelStatus === "applied"
+      ? "Labels applied to this message."
+      : row.labelStatus === "failed"
+        ? formatLabelError({ code: row.labelError })
+        : "";
+  }
+}
+
+function applyLabelOutcomesToRows(outcome) {
+  for (const id of outcome.appliedMessageIds) {
+    const row = reportRows.find((candidate) => candidate.id === id);
+    if (!row) continue;
+    row.labelStatus = "applied";
+    row.labelError = null;
+    selectedMessageIds.delete(id);
+    syncLabelRowStatus(row);
+  }
+  for (const group of outcome.failedGroups) {
+    for (const id of group.messageIds) {
+      const row = reportRows.find((candidate) => candidate.id === id);
+      if (!row) continue;
+      row.labelStatus = "failed";
+      row.labelError = group.code;
+      selectedMessageIds.add(id);
+      syncLabelRowStatus(row);
+    }
+  }
+}
+
+function labelOutcomeMessage(outcome) {
+  const appliedCount = outcome.appliedMessageIds.length;
+  const failedCount = outcome.failedGroups.reduce((count, group) => count + group.messageIds.length, 0);
+  const createdCount = outcome.createdLabelNames.length;
+  const createdNote = createdCount ? ` Created ${createdCount} missing label${createdCount === 1 ? "" : "s"}.` : "";
+  return {
+    failed: failedCount > 0,
+    text: failedCount
+      ? `${appliedCount} message${appliedCount === 1 ? "" : "s"} updated; ${failedCount} could not be labeled.${createdNote} Failed messages remain selected so you can retry.`
+      : `Labels applied to ${appliedCount} message${appliedCount === 1 ? "" : "s"}.${createdNote}`
+  };
+}
+
+async function applySelectedLabels() {
+  if (labelOperationInProgress) return;
+  const selectedRows = selectedRowsForLabeling();
+  if (selectedRows.length === 0) return;
+
+  labelOperationInProgress = true;
+  scanButton.disabled = true;
+  labelActionStatus.classList.remove("error");
+  labelActionStatus.textContent = "Requesting Google authorization, then creating any missing labels…";
+  updateLabelControls();
+
+  try {
+    const token = await getAccessToken([GMAIL_MODIFY_SCOPE]);
+    const outcome = await applySuggestedGmailLabels(
+      reportRows,
+      new Set(selectedRows.map((row) => row.id)),
+      token
+    );
+    applyLabelOutcomesToRows(outcome);
+    const status = labelOutcomeMessage(outcome);
+    labelActionStatus.classList.toggle("error", status.failed);
+    labelActionStatus.textContent = status.text;
+  } catch (error) {
+    labelActionStatus.classList.add("error");
+    const createdCount = Array.isArray(error?.createdLabelNames) ? error.createdLabelNames.length : 0;
+    const createdNote = createdCount
+      ? ` ${createdCount} label${createdCount === 1 ? " was" : "s were"} created, but no message-label update was completed.`
+      : "";
+    labelActionStatus.textContent = `${formatLabelError(error)}${createdNote}`;
+  } finally {
+    labelOperationInProgress = false;
+    scanButton.disabled = false;
+    updateLabelControls();
+  }
 }
 
 function formatScanError(error) {
@@ -351,11 +548,11 @@ function formatScanError(error) {
     case "oauth_not_configured":
       return "Set up the Google OAuth client ID in extension/manifest.json, then reload the extension.";
     case "google_auth_failed":
-      return "Google sign-in did not complete. Try again and approve Gmail read-only access.";
+      return "Google sign-in did not complete. Try again and approve the requested Gmail access.";
     case "google_auth_expired":
       return "Google's access token was rejected. Try scanning again to refresh authorization.";
     case "gmail_access_denied":
-      return "Gmail access was denied. Confirm the Gmail API is enabled and the OAuth app has the Gmail read-only scope.";
+      return "Gmail access was denied. Confirm the Gmail API is enabled, gmail.readonly is configured, and this account approved access.";
     case "gmail_network_error":
     case "gmail_request_failed":
       return "Could not retrieve the Gmail messages. Check your connection and retry.";
@@ -467,6 +664,8 @@ scanButton.addEventListener("click", async () => {
     scanButton.disabled = false;
   }
 });
+
+applyLabelsButton.addEventListener("click", applySelectedLabels);
 
 function isAnalysisResponse(result) {
   const purposeIds = Object.keys(PURPOSE_LABELS);

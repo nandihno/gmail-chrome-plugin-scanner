@@ -7,7 +7,7 @@ Inbox Signal is an on-demand Chrome extension for reviewing Gmail email. It has 
 1. Capture the currently open, expanded message in Gmail and review it individually.
 2. Scan up to the 20 newest messages labeled `INBOX`, then show category, recipient-header, attention, and phishing-risk summaries.
 
-The extension is report-only. It never sends, archives, labels, deletes, marks read, or otherwise changes email. The user initiates each scan and grants Google access through Chrome's OAuth prompt. The batch flow reads message bodies, but does not fetch or analyze attachments.
+Scanning is report-only: a scan never sends, archives, labels, deletes, marks read, or otherwise changes email. After reviewing the report, the user may explicitly select analyzed messages and apply suggested Gmail labels. The batch flow reads message bodies, but does not fetch or analyze attachments.
 
 ## Architecture and data flow
 
@@ -19,9 +19,13 @@ Batch flow
 User click → Chrome Identity OAuth → Gmail API (profile, latest 20 Inbox IDs, then full messages)
            → local To/Cc comparison + text/MIME parsing → batch request to local relay
            → bounded Jev calls → report page (percentages, categories, recipient relationship, evidence)
+
+Optional label action
+User selects analyzed rows → explicit Apply click → Chrome Identity OAuth → Gmail labels.list/create
+                          → Gmail messages.batchModify (addLabelIds only) → per-row outcome
 ```
 
-The extension uses Gmail API `messages.list` with `labelIds=INBOX` and `maxResults=20`; the API returns message IDs in newest-first order, and each message needs a separate `messages.get` request for full details. Gmail API scope `gmail.readonly` is required because the scan uses message bodies as well as headers. The Chrome Identity API provides the OAuth access token directly to the extension; it is never sent to the local relay or Jev.
+The extension uses Gmail API `messages.list` with `labelIds=INBOX` and `maxResults=20`; the API returns message IDs in newest-first order, and each message needs a separate `messages.get` request for full details. The Chrome Identity API provides the OAuth access token directly to the extension; it is never sent to the local relay or Jev. The manifest requests `gmail.readonly` for scanning. Only after the user clicks **Apply selected labels** does Chrome Identity request `gmail.modify` as an additional scope. That scope permits broader Gmail actions (including composing/sending) than the extension implements; the read-only token is used for profile/list/get, while the modify token is used only for label list/create and add-only batch modification.
 
 The list call is read-only. The scanner requests only the first page of at most 20 messages, fetches message details with a small concurrency limit, extracts the first readable plain-text part (or HTML text as a fallback), and ignores MIME parts marked as attachments. Body text is capped at 8,000 characters per message; at most 12 links are sent to the relay.
 
@@ -38,11 +42,21 @@ The local Node relay binds to `127.0.0.1`, checks the exact configured extension
 
 ## Permissions and OAuth setup
 
-The extension requires `identity` and `storage`, Gmail API and local-relay host permissions, and the OAuth scope `https://www.googleapis.com/auth/gmail.readonly`. `activeTab` and `scripting` remain for the individual-message flow. Chrome 105 or newer is required for the promise-based Identity API used here.
+The extension requires `identity` and `storage`, Gmail API and local-relay host permissions, and the manifest scope `https://www.googleapis.com/auth/gmail.readonly`. `activeTab` and `scripting` remain for the individual-message flow. Chrome 105 or newer is required for the promise-based Identity API used here. On explicit label application, the scanner uses Chrome Identity's per-call scopes override to request `https://www.googleapis.com/auth/gmail.modify`; the Google consent screen must list both scopes. This delays the broader grant until the user asks to write labels.
 
-The manifest contains a placeholder OAuth client ID. To use batch scanning, create a Google Cloud project, enable the Gmail API, configure its OAuth consent screen and test user, then create an OAuth client with application type **Chrome Extension** and the extension's ID. Replace the placeholder in `extension/manifest.json` and reload the unpacked extension. Google may show an unverified-app warning while the OAuth app is in testing. A public release using `gmail.readonly` requires Google's restricted-scope verification; transmitting restricted Gmail data to a server can also trigger a security assessment. Treat this implementation as local, personal development until those requirements are addressed.
+The manifest contains the configured Chrome Extension OAuth client ID. In Google Auth Platform → Data Access, the project must include both `gmail.readonly` and `gmail.modify`; keep the app in Testing and the scanning account among test users for personal development. Scanning continues to use its existing read-only authorization. Chrome requests `gmail.modify` only if the user explicitly applies labels. Google may show an unverified-app warning while the OAuth app is in testing. These Gmail scopes are restricted; public distribution requires Google's restricted-scope verification, and transmitting restricted Gmail data to Jev through a server can trigger a security assessment. Treat this implementation as local, personal development until those requirements are addressed.
 
 The Jev key remains a server secret in `server/.env` as `TYPESAFE_API_KEY`; never put it in the extension, manifest, or browser storage. The existing local relay is for personal development, not a multi-user production service.
+
+## Optional label suggestions and Gmail writes
+
+Label suggestions are derived in the extension from already returned Jev judgments plus its local To/Cc comparison; Gmail message IDs are not sent to the Jev relay. Purpose labels are suggested only when `purposeConfidence >= 0.50`. Separate labels are suggested for Jev's likely-attention result, locally observed absence of an owned address in To/Cc, and `review`/`high` risk bands. The user-facing risk label is **Risk Review**, not “phishing”; the recipient label is **Not Listed in To-Cc**, not a claim that the message was misdelivered.
+
+All message-selection checkboxes begin unchecked. An analyzed message is eligible only after the user selects it. The selection and labels are not persisted. Scanning alone does not create labels or alter messages.
+
+On explicit **Apply selected labels**, the extension calls Gmail `users.labels.list`, creates any missing `Inbox Signal - …` user labels, and groups selected message IDs by their exact set of suggested labels. It then calls `users.messages.batchModify` with `ids` and `addLabelIds` only. It never sends email content to Gmail again for this step, never supplies `removeLabelIds`, and does not remove or overwrite existing labels. Successfully applied and failed groups are reported separately; failed messages remain selected for retry. Reapplying an already-added Gmail label is safe and idempotent.
+
+The browser holds the Gmail OAuth token and makes these calls directly to Gmail. The local Jev relay is unchanged and receives neither label names nor Gmail message IDs.
 
 ## Jev judgments and report calculations
 
@@ -88,21 +102,26 @@ Each message evaluation consumes one unit from the local relay's 20-analysis-per
 
 1. Follow [`howtorun.md`](howtorun.md) to configure the Google OAuth client and local Jev relay.
 2. Type-check the relay with `npm run typecheck` in `server/`.
-3. Load/reload `extension/` from `chrome://extensions`; visit Gmail and click the extension icon.
-4. For the existing single-message flow, capture an expanded message, inspect the preview, then choose **Analyze with Jev**.
-5. For batch review, open **Open batch scanner**, add any owned aliases, and choose **Connect and scan latest 20**. Approve Google read-only access on first use.
-6. Confirm the connected mailbox is expected, then compare the report rows and category/To-Cc percentages with a few known messages. Check that failures appear as unavailable rather than low-risk.
-7. Verify that alias matches work for To and Cc, and that messages where you are absent from both are labeled “Not listed in To/Cc” with the Bcc/forwarding caveat.
+3. Run the label helper tests with `node --test extension/scanner/gmail-labels.test.mjs`.
+4. Load/reload `extension/` from `chrome://extensions`; visit Gmail and click the extension icon.
+5. For the existing single-message flow, capture an expanded message, inspect the preview, then choose **Analyze with Jev**.
+6. For batch review, open **Open batch scanner**, add any owned aliases, and choose **Connect and scan latest 20**. Approve read-only Gmail access for scanning; only after you click **Apply selected labels** should Chrome request `gmail.modify`.
+7. Confirm the connected mailbox is expected, then compare report rows and category/To-Cc percentages with a few known messages. Check that failures appear as unavailable rather than low-risk.
+8. Inspect suggested-label chips on known, non-sensitive messages. Verify purpose confidence below 0.50 does not suggest a purpose label, low risk does not suggest **Risk Review**, and absent To/Cc is worded as **Not Listed in To-Cc**.
+9. Select one test message and click **Apply selected labels**. Confirm only that message receives the displayed labels in Gmail. Confirm existing labels remain, failed outcomes are visible, and scanning again without selecting/applying makes no additional mailbox changes.
 
 No live Jev analysis has been exercised here; it needs the user's configured Google OAuth client, Google consent, and Jev API key. Use messages whose content you are comfortable sending to TypeSafe for evaluation.
 
 ## Cross-component impact and remaining work
 
 - **Manifest → scanner:** identity/storage permissions, Gmail host access, and OAuth config support the new scanner without weakening the existing active-tab capture flow.
+- **Scanner → Gmail labels API:** `gmail.modify` is required for the optional write flow. It runs only after explicit row selection and Apply; labels are add-only, and Gmail IDs/labels remain in the extension.
 - **Scanner → relay:** Gmail IDs and raw recipient headers stay in the extension; the relay receives bounded content plus the computed recipient enum.
 - **Relay → Jev:** batch validation, per-email rate accounting, bounded concurrency, generic row failures, URL minimization, and server-only API credentials keep provider integration behind one local boundary.
 - **Analyzer → both UIs:** one shared response now includes risk, purpose, and attention fields; both the single-message popup and the batch report render the new judgments.
 - **Docs:** setup now covers OAuth as well as Jev; the distinction between a local personal prototype and publicly verified Gmail access is explicit.
+
+- **Tests:** Node's built-in test runner covers label suggestion rules, explicit-selection grouping, label reuse/creation, add-only request bodies, authorization denial, and partial application.
 
 Before broader use, test MIME edge cases and the real mailbox layout; validate the recipient heuristics for aliases, Bcc, forwarding, and mailing lists; build a labeled test set to calibrate Jev questions and thresholds; and complete Google OAuth restricted-scope verification/security assessment plus proper service authentication before public distribution.
 
@@ -112,6 +131,8 @@ Before broader use, test MIME edge cases and the real mailbox layout; validate t
 - [Chrome extension OAuth guide](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth)
 - [Gmail API `messages.list`](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list)
 - [Gmail API `messages.get`](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get)
+- [Gmail API `labels.create`](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.labels/create)
+- [Gmail API `messages.batchModify`](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/batchModify)
 - [Gmail API scopes and verification](https://developers.google.com/workspace/gmail/api/auth/scopes)
 - [TypeSafe JavaScript SDK](https://docs.typesafe.ai/sdk/javascript)
 - [TypeSafe state](https://docs.typesafe.ai/concepts/state)
