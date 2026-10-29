@@ -58,7 +58,17 @@ export function validateCapturedMessage(value: unknown): CapturedMessage {
     body: boundedString(value.body, "body", 30_000),
     bodyTruncated: value.bodyTruncated,
     links: value.links.map(readLink),
-    linksTruncated: value.linksTruncated
+    linksTruncated: value.linksTruncated,
+    attachmentNames: Array.isArray(value.attachmentNames)
+      ? value.attachmentNames.slice(0, 20).map((name, idx) => boundedString(name, `attachment name ${idx}`, 255, true))
+      : undefined,
+    mailboxOwner: record(value.mailboxOwner)
+      ? {
+        name: typeof value.mailboxOwner.name === "string" ? boundedString(value.mailboxOwner.name, "mailbox owner name", 100, true) : undefined,
+        homeCountry: typeof value.mailboxOwner.homeCountry === "string" ? boundedString(value.mailboxOwner.homeCountry, "home country", 50, true) : undefined,
+        homeCurrency: typeof value.mailboxOwner.homeCurrency === "string" ? boundedString(value.mailboxOwner.homeCurrency, "home currency", 10, true) : undefined
+      }
+      : undefined
   };
 }
 

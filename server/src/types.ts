@@ -13,6 +13,12 @@ export interface CapturedMessage {
   bodyTruncated: boolean;
   links: CapturedLink[];
   linksTruncated: boolean;
+  attachmentNames?: string[];
+  mailboxOwner?: {
+    name?: string;
+    homeCountry?: string;
+    homeCurrency?: string;
+  };
 }
 
 export type RecipientRelation = "to_me" | "cc_me" | "not_listed" | "unclear";
@@ -45,6 +51,8 @@ export interface AnalysisResponse {
   purposeConfidence: number;
   importanceProbability: number;
   likelyNeedsAttention: boolean;
+  misdirectedProbability: number;
+  likelyMisdirected: boolean;
 }
 
 export interface BatchAnalysisResult {

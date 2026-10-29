@@ -3,7 +3,8 @@ import test from "node:test";
 import {
   applySuggestedGmailLabels,
   buildLabelGroups,
-  suggestedLabelNames
+  suggestedLabelNames,
+  summarizeLabelsByType
 } from "./gmail-labels.mjs";
 
 function analyzedRow(id, overrides = {}) {
@@ -206,4 +207,66 @@ test("reports successful and failed groups separately after a partial batch resu
   assert.deepEqual(outcome.appliedMessageIds, ["shopping"]);
   assert.deepEqual(outcome.failedGroups, [{ messageIds: ["important"], code: "gmail_label_request_failed" }]);
   assert.equal(calls.filter((call) => call.url.endsWith("/messages/batchModify")).length, 2);
+});
+
+test("suggests misdirected label and suppresses likely important label when message is misdirected", () => {
+  const row = analyzedRow("foreign-receipt", {
+    recipientRelation: "to_me",
+    analysis: {
+      purpose: "transactional",
+      purposeConfidence: 0.95,
+      likelyNeedsAttention: true,
+      likelyMisdirected: true,
+      band: "review"
+    }
+  });
+
+  assert.deepEqual(suggestedLabelNames(row), [
+    "Inbox Signal - Transactional and Account Notices",
+    "Inbox Signal - Misdirected / Other Person",
+    "Inbox Signal - Risk Review"
+  ]);
+});
+
+test("summarizes label counts, applied counts, and category totals by label type", () => {
+  const rows = [
+    {
+      ...analyzedRow("m1", {
+        recipientRelation: "not_listed",
+        analysis: {
+          purpose: "shopping_commercial",
+          purposeConfidence: 0.9,
+          likelyNeedsAttention: true,
+          band: "review"
+        }
+      }),
+      labelStatus: "applied"
+    },
+    analyzedRow("m2", {
+      recipientRelation: "to_me",
+      analysis: {
+        purpose: "shopping_commercial",
+        purposeConfidence: 0.85,
+        likelyNeedsAttention: false,
+        band: "low"
+      }
+    }),
+    { id: "m3", fetchError: true }
+  ];
+
+  const summary = summarizeLabelsByType(rows);
+  assert.equal(summary.analyzedCount, 2);
+  assert.equal(summary.totalSuggestedLabels, 5);
+  assert.equal(summary.purposeCount, 2);
+  assert.equal(summary.triageCount, 3);
+
+  const shopping = summary.items.find((item) => item.code === "PURPOSE::SHOPPING");
+  assert.equal(shopping.count, 2);
+  assert.equal(shopping.appliedCount, 1);
+  assert.equal(shopping.shareOfMessages, 100);
+
+  const risk = summary.items.find((item) => item.code === "SECURITY::RISK_REVIEW");
+  assert.equal(risk.count, 1);
+  assert.equal(risk.appliedCount, 1);
+  assert.equal(risk.shareOfMessages, 50);
 });

@@ -3,66 +3,84 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Inbox Signal</title>
+    <title>INBOX_SIGNAL // v0.1.0</title>
     <link rel="stylesheet" href="popup.css" />
     <script src="popup.js" defer></script>
   </head>
   <body>
+    <div class="scanline-overlay" aria-hidden="true"></div>
     <main class="shell">
       <header class="masthead">
-        <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
-        <div>
-          <p class="eyebrow">MESSAGE CHECK</p>
-          <h1>Inbox Signal</h1>
+        <div class="mark" aria-hidden="true">
+          <span></span><span></span><span></span>
         </div>
+        <div class="masthead-title">
+          <p class="eyebrow">SYS.TELEMETRY // MSG_INSPECTOR</p>
+          <h1>INBOX_SIGNAL<span class="cursor" aria-hidden="true">_</span></h1>
+        </div>
+        <div class="sys-badge" aria-hidden="true">v0.1</div>
       </header>
 
       <section class="intro" aria-labelledby="intro-title">
-        <p class="section-number">01 / CAPTURE</p>
-        <h2 id="intro-title">Look closer at this email.</h2>
-        <p>Open a message in Gmail, then capture its visible details here.</p>
+        <p class="section-number">[01 // DOM_CAPTURE]</p>
+        <h2 id="intro-title">Inspect active packet.</h2>
+        <p>Open a message in Gmail, then dump its visible DOM payload into the local inspector.</p>
       </section>
 
       <section class="panel" aria-live="polite">
+        <div class="terminal-bar" aria-hidden="true">
+          <span class="term-dots"><i></i><i></i><i></i></span>
+          <span class="term-title">tty0: tab_probe</span>
+        </div>
         <div class="status-row">
           <span class="status-dot" id="status-dot" aria-hidden="true"></span>
           <p id="status">Checking the active tab…</p>
         </div>
-        <button id="capture" type="button" disabled>Capture open message <span aria-hidden="true">↗</span></button>
+        <button id="capture" type="button" disabled>
+          <span>$ capture --open-message</span>
+          <span aria-hidden="true">[EXEC ↗]</span>
+        </button>
       </section>
 
       <section class="batch-entry">
-        <p class="section-number">INBOX OVERVIEW</p>
-        <p>Want a snapshot of the latest 20 Inbox emails instead?</p>
-        <button id="open-batch" class="secondary-button" type="button">Open batch scanner <span aria-hidden="true">↗</span></button>
+        <p class="section-number">[02 // BATCH_TELEMETRY]</p>
+        <p>Run full heuristic + label distribution analysis on the latest 20 uncategorised Inbox messages:</p>
+        <button id="open-batch" class="secondary-button" type="button">
+          <span>$ ./open-batch-scanner.sh --limit=20</span>
+          <span aria-hidden="true">[↗]</span>
+        </button>
       </section>
 
       <section class="message" id="message" hidden aria-labelledby="message-title">
-        <p class="section-number">MESSAGE FOUND</p>
+        <p class="section-number">[03 // PAYLOAD_EXTRACTED]</p>
         <h2 id="message-title"></h2>
-        <dl>
-          <div><dt>From</dt><dd id="sender"></dd></div>
-          <div><dt>Body</dt><dd id="body-size"></dd></div>
-          <div><dt>Links</dt><dd id="link-count"></dd></div>
+        <dl class="kv-grid">
+          <div><dt>FROM_HDR</dt><dd id="sender"></dd></div>
+          <div><dt>BODY_LEN</dt><dd id="body-size"></dd></div>
+          <div><dt>URI_REFS</dt><dd id="link-count"></dd></div>
         </dl>
-        <p class="privacy-note">When you choose to analyze, this message is sent to TypeSafe Jev through your local relay.</p>
-        <button id="analyze" type="button" hidden>Analyze with Jev <span aria-hidden="true">↗</span></button>
+        <p class="privacy-note">// NOTE: Executing analysis pipes this payload to TypeSafe Jev via localhost:8787.</p>
+        <button id="analyze" type="button" hidden>
+          <span>$ jev --analyze-payload</span>
+          <span aria-hidden="true">[RUN ↗]</span>
+        </button>
       </section>
 
       <section class="assessment" id="assessment" hidden aria-live="polite" aria-labelledby="assessment-title">
         <div class="assessment-heading">
-          <p class="section-number">JEV ASSESSMENT</p>
+          <p class="section-number">[04 // JEV_DIAGNOSTIC]</p>
           <span class="risk-band" id="risk-band"></span>
         </div>
         <h2 id="assessment-title"></h2>
         <p class="coverage" id="coverage"></p>
+        <div class="telemetry-meters" id="popup-meters" hidden></div>
         <p class="triage-summary" id="triage-summary"></p>
         <ul id="signals"></ul>
       </section>
 
       <footer>
-        <span>LOCAL PREVIEW</span>
-        <span>Jev analysis is the next step</span>
+        <span>[RELAY: 127.0.0.1:8787]</span>
+        <span>MODE: LOCAL_PREVIEW</span>
       </footer>
     </main>
   </body>

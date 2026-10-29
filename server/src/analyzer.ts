@@ -8,6 +8,7 @@ const HIGH_SCORE = 2.3;
 const REVIEW_SCORE = 1.15;
 const MIN_SCORE_CONFIDENCE = 0.55;
 const IMPORTANT_PROBABILITY = 0.70;
+const MISDIRECTED_PROBABILITY = 0.70;
 const URL_TEXT_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"')]+|\b[a-z0-9.-]+\.[a-z]{2,}(?:[/?#][^\s<>"')]+)?/gi;
 
 const purposeOptions = {
@@ -67,6 +68,13 @@ const questions = {
       true: "The email asks for a response or action, contains a personally relevant matter needing attention, or is a specific notice the mailbox owner should act on or retain for a decision.",
       false: "The email is general promotion, routine bulk content, or an informational message with no clear personal action or decision for the mailbox owner."
     }
+  ),
+  misdirected_recipient: noul(
+    "Does this email appear to be misdirected or intended for a different person sharing the name 'Fernando De Leon' located outside Australia? Look for local domestic transactions, physical store receipts, utilities, ride-shares, medical appointments, government notices, or domestic services situated in countries like Mexico, the Philippines, or elsewhere outside Australia. Consider currencies (e.g. MXN, PHP), local addresses, domestic phone numbers (+52, +63), attached invoice/receipt filenames (e.g. CFDI, facturas, recibos), and greeting names. Note: Legitimate global or international online services (e.g. Apple, Google, Microsoft, GitHub, Steam, Netflix, international airlines) used by Australian residents should NOT be judged as misdirected.",
+    {
+      true: "The email is clearly a local foreign domestic transaction, receipt, service notice, or personal message meant for another person located outside Australia.",
+      false: "The email is either intended for the mailbox owner in Australia, is an international online service relevant to an Australian resident, or lacks clear evidence of being misdirected."
+    }
   )
 } as const;
 
@@ -120,7 +128,13 @@ export async function analyzeMessage(message: CapturedMessage | BatchCapturedMes
       destination: url.hostname
     };
   });
+  const mailboxOwner = {
+    name: message.mailboxOwner?.name || "Fernando De Leon",
+    primary_residence: message.mailboxOwner?.homeCountry || "Australia",
+    primary_currency: message.mailboxOwner?.homeCurrency || "AUD"
+  };
   const state = {
+    mailbox_owner: mailboxOwner,
     email: {
       subject: message.subject,
       sender: message.sender,
@@ -128,6 +142,7 @@ export async function analyzeMessage(message: CapturedMessage | BatchCapturedMes
       body_truncated: message.bodyTruncated,
       links_truncated: message.linksTruncated,
       links: safeLinks,
+      attachment_names: message.attachmentNames || [],
       recipient_relation: "recipientRelation" in message ? message.recipientRelation : "unknown"
     }
   };
@@ -150,6 +165,8 @@ export async function analyzeMessage(message: CapturedMessage | BatchCapturedMes
     throw new Error("Unexpected Jev purpose answer");
   }
   const importanceProbability = getProbability(importanceAnswer, "needs_attention");
+  const misdirectedProbability = getProbability(response.answers.misdirected_recipient, "misdirected_recipient");
+  const likelyMisdirected = misdirectedProbability >= MISDIRECTED_PROBABILITY;
 
   const probabilities = {
     sensitiveRequest: getProbability(response.answers.sensitive_request, "sensitive_request"),
@@ -182,6 +199,14 @@ export async function analyzeMessage(message: CapturedMessage | BatchCapturedMes
     }
   }
 
+  if (misdirectedProbability >= REVIEW_PROBABILITY) {
+    signals.push({
+      id: "misdirected_recipient",
+      label: "The message appears to be a foreign transaction, receipt, or service for another recipient outside Australia.",
+      probability: rounded(misdirectedProbability)
+    });
+  }
+
   const hostMismatch = hasVisibleHostMismatch(message);
   if (hostMismatch) {
     signals.push({
@@ -204,6 +229,7 @@ export async function analyzeMessage(message: CapturedMessage | BatchCapturedMes
         || hostMismatch
         || message.bodyTruncated
         || message.linksTruncated
+        || likelyMisdirected
         ? "review"
         : "low";
 
@@ -216,6 +242,8 @@ export async function analyzeMessage(message: CapturedMessage | BatchCapturedMes
     purpose: purposeAnswer.choice as EmailPurpose,
     purposeConfidence: rounded(purposeAnswer.confidence),
     importanceProbability: rounded(importanceProbability),
-    likelyNeedsAttention: importanceProbability >= IMPORTANT_PROBABILITY
+    likelyNeedsAttention: !likelyMisdirected && importanceProbability >= IMPORTANT_PROBABILITY,
+    misdirectedProbability: rounded(misdirectedProbability),
+    likelyMisdirected
   };
 }

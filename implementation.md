@@ -77,11 +77,12 @@ Label suggestions use the existing analysis result and local To/Cc comparison. E
 | `Inbox Signal - Personal Correspondence` | Purpose is `personal_correspondence`. |
 | `Inbox Signal - Work and Services` | Purpose is `work_or_service`. |
 | `Inbox Signal - Other` | Purpose is `other`. |
-| `Inbox Signal - Likely Important` | `likelyNeedsAttention === true`, computed on the relay at an attention probability of at least 0.70. |
+| `Inbox Signal - Likely Important` | `likelyNeedsAttention === true`, computed on the relay at an attention probability of at least 0.70 (suppressed if likelyMisdirected is true). |
 | `Inbox Signal - Not Listed in To-Cc` | Local `recipientRelation === "not_listed"`: at least one To/Cc address was parsed, but none matched the profile address or aliases. `unclear` does not qualify. |
 | `Inbox Signal - Risk Review` | The relay's risk band is `review` or `high`. |
+| `Inbox Signal - Misdirected / Other Person` | `likelyMisdirected === true`, computed on the relay when foreign domestic activities, local receipts, or mismatch indicators have probability at least 0.70. |
 
-A message can receive one purpose label plus any of the three other labels, for a maximum of four suggestions. Purpose confidence is rounded to two decimal places by the relay before the extension applies its 0.50 threshold. The attention flag is computed before probability rounding, so a displayed 70% near the boundary can still have a false attention flag. Report category counts include all successful analyses, including those below the purpose-label threshold.
+A message can receive one purpose label plus any of the four other labels, for a maximum of five suggestions. Purpose confidence is rounded to two decimal places by the relay before the extension applies its 0.50 threshold. The attention flag is computed before probability rounding, so a displayed 70% near the boundary can still have a false attention flag. Report category counts include all successful analyses, including those below the purpose-label threshold.
 
 These are ordinary custom Gmail labels. They do not set Gmail's built-in Important marker, Spam label, or Promotions/category tabs. **Risk Review** can result from limited evidence or uncertainty as well as risk signals. **Not Listed in To-Cc** is a header observation; Bcc, forwarding, mailing lists and aliases remain possible explanations.
 
@@ -110,6 +111,7 @@ Each email is one structured Jev state. One TypeSafe System One request evaluate
 - One Score for overall phishing/social-engineering concern.
 - One Choice for primary purpose: shopping/commercial, transactional, newsletter, personal correspondence, work/service, or other.
 - One Noul estimating whether the account owner likely needs to act, respond, attend to a personal matter, or retain the message for a decision.
+- One Noul estimating whether the email is misdirected or intended for a different person sharing the name outside Australia (e.g. foreign domestic transactions, receipts, local utilities, medical visits, or appointments in Mexico, the Philippines, etc.).
 
 Code, not Jev, decides who is listed in To/Cc, parses addresses and URLs, applies risk bands, and computes report percentages. The report defines “needs attention” as an importance Noul of at least 0.70. It separately reports the proportion listed in To/Cc and the intersection (“Direct + attention”). All percentage denominators are successfully Jev-analyzed messages; Gmail-fetch or Jev failures are shown separately and excluded. Purpose breakdowns and risk bands are also advisory. The 0.70 threshold and current risk-band thresholds are provisional and are not validated accuracy claims.
 

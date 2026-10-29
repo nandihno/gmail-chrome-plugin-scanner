@@ -90,6 +90,9 @@ function renderAssessment(result) {
     || typeof result?.purpose !== "string"
     || typeof result?.purposeConfidence !== "number"
     || typeof result?.importanceProbability !== "number"
+    || (result?.misdirectedProbability !== undefined
+      && (typeof result.misdirectedProbability !== "number" || result.misdirectedProbability < 0 || result.misdirectedProbability > 1))
+    || (result?.likelyMisdirected !== undefined && typeof result.likelyMisdirected !== "boolean")
     || !Array.isArray(result?.signals)
     || result.signals.some((signal) => typeof signal?.label !== "string"
       || (signal.probability !== undefined
@@ -120,7 +123,42 @@ function renderAssessment(result) {
     work_or_service: "Work / service",
     other: "Other"
   };
-  document.getElementById("triage-summary").textContent = `Purpose: ${purposeLabels[result.purpose] || "Other"}. Needs-attention likelihood: ${Math.round(result.importanceProbability * 100)}% (provisional display threshold: 70%). Recipient headers are not available in this single-message capture.`;
+  const metersEl = document.getElementById("popup-meters");
+  if (metersEl) {
+    metersEl.replaceChildren();
+    const createMeter = (label, prob, warn = false) => {
+      const pct = Math.round(prob * 100);
+      const row = document.createElement("div");
+      row.className = "meter-row";
+      const head = document.createElement("div");
+      head.className = "meter-head";
+      const name = document.createElement("span");
+      name.textContent = label;
+      const val = document.createElement("strong");
+      val.textContent = `${pct}%`;
+      head.append(name, val);
+      const track = document.createElement("div");
+      track.className = "meter-track";
+      const fill = document.createElement("div");
+      fill.className = `meter-fill ${warn ? "warn" : ""}`.trim();
+      fill.style.width = `${Math.max(2, pct)}%`;
+      track.append(fill);
+      row.append(head, track);
+      return row;
+    };
+    metersEl.append(
+      createMeter(`PURPOSE_CONF [${(purposeLabels[result.purpose] || "Other").toUpperCase()}]`, result.purposeConfidence),
+      createMeter("ATTENTION_PROB [THRESHOLD: 70%]", result.importanceProbability, result.importanceProbability >= 0.7)
+    );
+    if (typeof result.misdirectedProbability === "number") {
+      metersEl.append(
+        createMeter("MISDIRECTED_PROB [FOREIGN_ACT]", result.misdirectedProbability, result.likelyMisdirected)
+      );
+    }
+    metersEl.hidden = false;
+  }
+  const misdirectedText = result.likelyMisdirected ? " ⚠️ Likely misdirected: foreign domestic activity or receipt for another recipient detected." : "";
+  document.getElementById("triage-summary").textContent = `Purpose: ${purposeLabels[result.purpose] || "Other"}. Needs-attention likelihood: ${Math.round(result.importanceProbability * 100)}% (provisional display threshold: 70%). Recipient headers are not available in this single-message capture.${misdirectedText}`;
   signalList.replaceChildren();
 
   if (result.signals.length === 0) {

@@ -25,6 +25,12 @@
     .filter((link) => /^https?:\/\//i.test(link.href))
     .map((link) => ({ text: (link.innerText || link.textContent || "").trim().slice(0, 250), href: link.href }));
 
+  const attachmentElements = [...selected.root.querySelectorAll(".aV3, .aZo, .hq, [download]")];
+  const attachmentNames = [...new Set(attachmentElements
+    .map((el) => el.getAttribute("download") || el.getAttribute("aria-label") || el.textContent?.trim() || "")
+    .filter((name) => name.length > 0 && name.length < 255)
+  )].slice(0, 10);
+
   return {
     ok: true,
     message: {
@@ -33,7 +39,8 @@
       body: fullBody.slice(0, maxBodyLength),
       bodyTruncated: fullBody.length > maxBodyLength,
       links: links.slice(0, maxLinks),
-      linksTruncated: links.length > maxLinks
+      linksTruncated: links.length > maxLinks,
+      attachmentNames
     }
   };
 })();

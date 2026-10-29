@@ -11,11 +11,86 @@ const PURPOSE_LABELS = Object.freeze({
 const ATTENTION_LABEL = "Inbox Signal - Likely Important";
 const RECIPIENT_LABEL = "Inbox Signal - Not Listed in To-Cc";
 const RISK_LABEL = "Inbox Signal - Risk Review";
+const MISDIRECTED_LABEL = "Inbox Signal - Misdirected / Other Person";
 export const INBOX_SIGNAL_LABEL_NAMES = Object.freeze([
   ...Object.values(PURPOSE_LABELS),
   ATTENTION_LABEL,
   RECIPIENT_LABEL,
-  RISK_LABEL
+  RISK_LABEL,
+  MISDIRECTED_LABEL
+]);
+
+export const LABEL_TYPE_DEFINITIONS = Object.freeze([
+  {
+    name: PURPOSE_LABELS.shopping_commercial,
+    code: "PURPOSE::SHOPPING",
+    shortLabel: "Shopping & Commercial",
+    category: "purpose",
+    tone: "cyan"
+  },
+  {
+    name: PURPOSE_LABELS.transactional,
+    code: "PURPOSE::TRANSACTIONAL",
+    shortLabel: "Transactional & Account",
+    category: "purpose",
+    tone: "cyan"
+  },
+  {
+    name: PURPOSE_LABELS.newsletter,
+    code: "PURPOSE::NEWSLETTER",
+    shortLabel: "Newsletters & Digests",
+    category: "purpose",
+    tone: "cyan"
+  },
+  {
+    name: PURPOSE_LABELS.personal_correspondence,
+    code: "PURPOSE::PERSONAL",
+    shortLabel: "Personal Correspondence",
+    category: "purpose",
+    tone: "cyan"
+  },
+  {
+    name: PURPOSE_LABELS.work_or_service,
+    code: "PURPOSE::WORK_SERVICE",
+    shortLabel: "Work & Services",
+    category: "purpose",
+    tone: "cyan"
+  },
+  {
+    name: PURPOSE_LABELS.other,
+    code: "PURPOSE::OTHER",
+    shortLabel: "Other Purpose",
+    category: "purpose",
+    tone: "cyan"
+  },
+  {
+    name: ATTENTION_LABEL,
+    code: "TRIAGE::IMPORTANT",
+    shortLabel: "Likely Important",
+    category: "triage",
+    tone: "green"
+  },
+  {
+    name: RECIPIENT_LABEL,
+    code: "HEADER::NOT_IN_TO_CC",
+    shortLabel: "Not Listed in To/Cc",
+    category: "triage",
+    tone: "amber"
+  },
+  {
+    name: RISK_LABEL,
+    code: "SECURITY::RISK_REVIEW",
+    shortLabel: "Risk Review",
+    category: "triage",
+    tone: "red"
+  },
+  {
+    name: MISDIRECTED_LABEL,
+    code: "ALERT::MISDIRECTED",
+    shortLabel: "Misdirected / Other Person",
+    category: "triage",
+    tone: "magenta"
+  }
 ]);
 
 export class GmailLabelError extends Error {
@@ -79,7 +154,11 @@ export function suggestedLabelNames(row) {
   if (purposeLabel && Number.isFinite(row.analysis.purposeConfidence) && row.analysis.purposeConfidence >= 0.5) {
     labels.push(purposeLabel);
   }
-  if (row.analysis.likelyNeedsAttention === true) labels.push(ATTENTION_LABEL);
+  if (row.analysis.likelyMisdirected === true) {
+    labels.push(MISDIRECTED_LABEL);
+  } else if (row.analysis.likelyNeedsAttention === true) {
+    labels.push(ATTENTION_LABEL);
+  }
   if (row.recipientRelation === "not_listed") labels.push(RECIPIENT_LABEL);
   if (["review", "high"].includes(row.analysis.band)) labels.push(RISK_LABEL);
   return [...new Set(labels)];
@@ -175,6 +254,59 @@ async function applyLabelGroups(groups, labelsByName, fetchImpl, token) {
   }
 
   return { appliedMessageIds, failedGroups };
+}
+
+export function summarizeLabelsByType(rows) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const analyzedRows = safeRows.filter((row) => row?.analysis);
+  const analyzedCount = analyzedRows.length;
+
+  const countsByName = new Map(LABEL_TYPE_DEFINITIONS.map((def) => [def.name, 0]));
+  const appliedByName = new Map(LABEL_TYPE_DEFINITIONS.map((def) => [def.name, 0]));
+
+  for (const row of analyzedRows) {
+    const labels = Array.isArray(row.labelSuggestions)
+      ? row.labelSuggestions
+      : suggestedLabelNames(row);
+    for (const label of labels) {
+      if (countsByName.has(label)) {
+        countsByName.set(label, countsByName.get(label) + 1);
+        if (row.labelStatus === "applied") {
+          appliedByName.set(label, appliedByName.get(label) + 1);
+        }
+      }
+    }
+  }
+
+  let totalSuggestedLabels = 0;
+  for (const count of countsByName.values()) totalSuggestedLabels += count;
+
+  const items = LABEL_TYPE_DEFINITIONS.map((def) => {
+    const count = countsByName.get(def.name) || 0;
+    const appliedCount = appliedByName.get(def.name) || 0;
+    return {
+      ...def,
+      count,
+      appliedCount,
+      shareOfMessages: analyzedCount ? Math.round((count / analyzedCount) * 100) : 0,
+      shareOfLabels: totalSuggestedLabels ? Math.round((count / totalSuggestedLabels) * 100) : 0
+    };
+  });
+
+  const purposeCount = items
+    .filter((item) => item.category === "purpose")
+    .reduce((sum, item) => sum + item.count, 0);
+  const triageCount = items
+    .filter((item) => item.category === "triage")
+    .reduce((sum, item) => sum + item.count, 0);
+
+  return {
+    analyzedCount,
+    totalSuggestedLabels,
+    purposeCount,
+    triageCount,
+    items
+  };
 }
 
 export async function applySuggestedGmailLabels(rows, selectedMessageIds, token, fetchImpl = globalThis.fetch) {

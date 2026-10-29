@@ -1,7 +1,8 @@
 import {
   applySuggestedGmailLabels,
   INBOX_SIGNAL_LABEL_NAMES,
-  suggestedLabelNames
+  suggestedLabelNames,
+  summarizeLabelsByType
 } from "./gmail-labels.mjs";
 
 const ANALYSIS_ENDPOINT = "http://127.0.0.1:8787/analyze-batch";
@@ -94,6 +95,15 @@ function collectBodyParts(part, found = { plain: [], html: [] }) {
   return found;
 }
 
+function collectAttachments(part, found = []) {
+  if (!part) return found;
+  if (typeof part.filename === "string" && part.filename.trim()) {
+    found.push(part.filename.trim());
+  }
+  for (const child of part.parts || []) collectAttachments(child, found);
+  return found;
+}
+
 function linksFromHtml(html) {
   const parsed = new DOMParser().parseFromString(html, "text/html");
   parsed.querySelectorAll("script, style, noscript, template").forEach((node) => node.remove());
@@ -135,6 +145,7 @@ function parseSender(raw) {
 function parseGmailMessage(message, ownedAddresses) {
   const headers = message.payload?.headers || [];
   const parts = collectBodyParts(message.payload);
+  const attachmentNames = collectAttachments(message.payload).slice(0, 10);
   const htmlContent = parts.html[0] ? linksFromHtml(parts.html[0]) : null;
   const originalBody = parts.plain[0] || htmlContent?.body || "";
   const allLinks = htmlContent?.links.length ? htmlContent.links : linksFromPlainText(originalBody);
@@ -157,7 +168,8 @@ function parseGmailMessage(message, ownedAddresses) {
     body: body || "[No readable text body was found.]",
     bodyTruncated: bodyUnavailable || emailBody.length > MAX_BODY_LENGTH,
     links: allLinks.slice(0, MAX_LINKS),
-    linksTruncated: allLinks.length > MAX_LINKS
+    linksTruncated: allLinks.length > MAX_LINKS,
+    attachmentNames
   };
 }
 
@@ -325,18 +337,191 @@ function createStat(label, value, detail) {
   return card;
 }
 
+function asciiBar(percentage, width = 8) {
+  const filled = Math.max(0, Math.min(width, Math.round((percentage / 100) * width)));
+  return "█".repeat(filled) + "░".repeat(width - filled);
+}
+
 function renderBreakdown(list, labels, countFor, total) {
   list.replaceChildren();
   for (const [key, label] of Object.entries(labels)) {
     const count = countFor(key);
+    const pct = total ? Math.round((count / total) * 100) : 0;
     const row = document.createElement("li");
+    const line = document.createElement("div");
+    line.className = "breakdown-line";
     const name = document.createElement("span");
     name.textContent = label;
     const value = document.createElement("strong");
-    value.textContent = `${count} · ${total ? Math.round((count / total) * 100) : 0}%`;
-    row.append(name, value);
+    value.textContent = `${count} · ${pct}%`;
+    line.append(name, value);
+
+    const track = document.createElement("div");
+    track.className = "mini-bar-track";
+    const fill = document.createElement("div");
+    fill.className = "mini-bar-fill";
+    fill.style.width = `${pct}%`;
+    track.append(fill);
+
+    row.append(line, track);
     list.append(row);
   }
+}
+
+function renderLabelBarRow(item, maxCategoryCount) {
+  const row = document.createElement("div");
+  row.className = "bar-row";
+  row.setAttribute("role", "listitem");
+
+  const top = document.createElement("div");
+  top.className = "bar-row-top";
+
+  const labelGroup = document.createElement("div");
+  labelGroup.className = "bar-label-group";
+  const code = document.createElement("span");
+  code.className = "bar-code";
+  code.textContent = `[${item.code}]`;
+  const name = document.createElement("span");
+  name.className = "bar-name";
+  name.textContent = item.shortLabel;
+  name.title = item.name;
+  labelGroup.append(code, name);
+
+  const metrics = document.createElement("div");
+  metrics.className = "bar-metrics";
+
+  const ascii = document.createElement("span");
+  ascii.className = "bar-ascii";
+  ascii.setAttribute("aria-hidden", "true");
+  ascii.textContent = asciiBar(item.shareOfMessages, 8);
+
+  const countBadge = document.createElement("span");
+  countBadge.className = "bar-count-badge";
+  countBadge.textContent = `${item.count} (${item.shareOfMessages}%)`;
+
+  metrics.append(ascii, countBadge);
+
+  if (item.appliedCount > 0) {
+    const applied = document.createElement("span");
+    applied.className = "bar-applied-badge";
+    applied.textContent = `APPLIED:${item.appliedCount}`;
+    metrics.append(applied);
+  }
+
+  top.append(labelGroup, metrics);
+
+  const track = document.createElement("div");
+  track.className = "bar-track";
+  const fill = document.createElement("div");
+  fill.className = `bar-fill tone-${item.tone}`;
+  const relativeWidth = maxCategoryCount > 0
+    ? Math.round((item.count / maxCategoryCount) * 100)
+    : 0;
+  fill.style.width = item.count > 0 ? `${Math.max(4, relativeWidth)}%` : "0%";
+  track.append(fill);
+
+  row.append(top, track);
+  return row;
+}
+
+function renderLabelTypeGraphs(rows) {
+  const summary = summarizeLabelsByType(rows);
+  const kpisEl = document.getElementById("label-graph-kpis");
+  const spectrumEl = document.getElementById("label-spectrum-overview");
+  const purposeChartEl = document.getElementById("purpose-label-chart");
+  const triageChartEl = document.getElementById("triage-label-chart");
+  const purposeTotalEl = document.getElementById("purpose-labels-total");
+  const triageTotalEl = document.getElementById("triage-labels-total");
+
+  if (!kpisEl || !spectrumEl || !purposeChartEl || !triageChartEl) return;
+
+  const totalApplied = summary.items.reduce((sum, item) => sum + item.appliedCount, 0);
+
+  kpisEl.replaceChildren();
+  const makeKpi = (label, value, extraClass = "") => {
+    const pill = document.createElement("span");
+    pill.className = `kpi-pill ${extraClass}`.trim();
+    pill.textContent = `${label}:`;
+    const strong = document.createElement("strong");
+    strong.textContent = String(value);
+    pill.append(strong);
+    return pill;
+  };
+  kpisEl.append(
+    makeKpi("TOTAL_SUGGESTED_LABELS", summary.totalSuggestedLabels),
+    makeKpi("PURPOSE_TAGS", summary.purposeCount),
+    makeKpi("TRIAGE_&_RISK_TAGS", summary.triageCount),
+    makeKpi("COMMITTED_TO_GMAIL", totalApplied, "applied")
+  );
+
+  // Stacked spectrum distribution bar across label types
+  spectrumEl.replaceChildren();
+  const specHead = document.createElement("div");
+  specHead.className = "spectrum-head";
+  const specTitle = document.createElement("span");
+  specTitle.textContent = "MULTI-LABEL SPECTRUM // PROPORTION BY LABEL TYPE";
+  const specRatio = document.createElement("span");
+  const avgLabels = summary.analyzedCount
+    ? (summary.totalSuggestedLabels / summary.analyzedCount).toFixed(1)
+    : "0.0";
+  specRatio.textContent = `AVG_DENSITY: ${avgLabels} LABELS / MSG`;
+  specHead.append(specTitle, specRatio);
+
+  const specTrack = document.createElement("div");
+  specTrack.className = "spectrum-track";
+  const activeItems = summary.items.filter((item) => item.count > 0);
+  if (activeItems.length === 0) {
+    const emptySeg = document.createElement("div");
+    emptySeg.className = "spectrum-seg";
+    emptySeg.style.width = "100%";
+    emptySeg.style.background = "#182432";
+    specTrack.append(emptySeg);
+  } else {
+    for (const item of activeItems) {
+      const seg = document.createElement("div");
+      seg.className = `spectrum-seg tone-${item.tone}`;
+      seg.style.width = `${Math.max(3, (item.count / summary.totalSuggestedLabels) * 100)}%`;
+      seg.title = `${item.shortLabel}: ${item.count} (${item.shareOfLabels}% of suggested labels)`;
+      specTrack.append(seg);
+    }
+  }
+
+  const specLegend = document.createElement("div");
+  specLegend.className = "spectrum-legend";
+  const legendGroups = [
+    { label: `Purpose Classification (${summary.purposeCount})`, tone: "cyan" },
+    { label: `Likely Important (${summary.items.find((i) => i.code === "TRIAGE::IMPORTANT")?.count || 0})`, tone: "green" },
+    { label: `Not in To/Cc (${summary.items.find((i) => i.code === "HEADER::NOT_IN_TO_CC")?.count || 0})`, tone: "amber" },
+    { label: `Risk Review (${summary.items.find((i) => i.code === "SECURITY::RISK_REVIEW")?.count || 0})`, tone: "red" },
+    { label: `Misdirected (${summary.items.find((i) => i.code === "ALERT::MISDIRECTED")?.count || 0})`, tone: "magenta" }
+  ];
+  for (const grp of legendGroups) {
+    const lItem = document.createElement("span");
+    lItem.className = "legend-item";
+    const swatch = document.createElement("i");
+    swatch.className = `legend-swatch tone-${grp.tone}`;
+    const text = document.createElement("span");
+    text.textContent = grp.label;
+    lItem.append(swatch, text);
+    specLegend.append(lItem);
+  }
+
+  spectrumEl.append(specHead, specTrack, specLegend);
+
+  // Render Purpose Labels Chart & Triage Labels Chart
+  const purposeItems = summary.items.filter((item) => item.category === "purpose");
+  const triageItems = summary.items.filter((item) => item.category === "triage");
+  const maxScale = Math.max(1, summary.analyzedCount, ...summary.items.map((item) => item.count));
+
+  if (purposeTotalEl) {
+    purposeTotalEl.textContent = `${summary.purposeCount} label${summary.purposeCount === 1 ? "" : "s"}`;
+  }
+  if (triageTotalEl) {
+    triageTotalEl.textContent = `${summary.triageCount} label${summary.triageCount === 1 ? "" : "s"}`;
+  }
+
+  purposeChartEl.replaceChildren(...purposeItems.map((item) => renderLabelBarRow(item, maxScale)));
+  triageChartEl.replaceChildren(...triageItems.map((item) => renderLabelBarRow(item, maxScale)));
 }
 
 function appendTag(parent, label, className = "") {
@@ -410,6 +595,7 @@ function renderEmailRow(row, rowIndex) {
     appendTag(tags, PURPOSE_LABELS[row.analysis.purpose] || "Other");
     appendTag(tags, RECIPIENT_LABELS[row.recipientRelation] || RECIPIENT_LABELS.unclear);
     appendTag(tags, `Risk: ${row.analysis.band}`, row.analysis.band);
+    if (row.analysis.likelyMisdirected) appendTag(tags, "Misdirected (Not Me)", "misdirected");
     if (row.analysis.purposeConfidence < 0.5) appendTag(tags, "Purpose unclear", "uncertain");
     article.append(tags);
 
@@ -419,6 +605,12 @@ function renderEmailRow(row, rowIndex) {
     const assessment = document.createElement("strong");
     assessment.textContent = row.analysis.likelyNeedsAttention ? "Likely needs attention." : "No clear action identified.";
     summary.append(assessment);
+    if (row.analysis.likelyMisdirected) {
+      const misdirectedAlert = document.createElement("strong");
+      misdirectedAlert.style.color = "var(--neon-magenta)";
+      misdirectedAlert.textContent = " ⚠️ Foreign domestic activity/receipt detected (likely misdirected to another person).";
+      summary.append(misdirectedAlert);
+    }
     if (row.analysis.coverage === "limited") summary.append(" The text body was unavailable or the analyzed text or links were truncated.");
     article.append(summary);
 
@@ -472,6 +664,7 @@ function renderReport(rows, listedCount) {
     (row.recipientRelation === "to_me" || row.recipientRelation === "cc_me")
       && row.analysis.likelyNeedsAttention
   ).length;
+  const misdirected = analyzed.filter((row) => row.analysis.likelyMisdirected).length;
   const riskReview = analyzed.filter((row) => row.analysis.band !== "low").length;
 
   document.getElementById("report-count").textContent = `${total} of ${listedCount} analyzed`;
@@ -485,9 +678,11 @@ function renderReport(rows, listedCount) {
     createStat("Needs attention", total ? `${Math.round((attention / total) * 100)}%` : "—", `${attention} of ${total} Jev-analyzed messages at or above the provisional 70% threshold`),
     createStat("Listed in To or Cc", total ? `${Math.round((direct / total) * 100)}%` : "—", `${direct} of ${total} analyzed messages list you or an alias in To/Cc`),
     createStat("Direct + attention", total ? `${Math.round((directAndAttention / total) * 100)}%` : "—", `${directAndAttention} messages both list you in To/Cc and likely need attention`),
+    createStat("Likely misdirected", total ? `${misdirected}` : "—", `${misdirected} of ${total} messages appear to be foreign transactions or intended for someone else`),
     createStat("Risk: review or high", total ? `${Math.round((riskReview / total) * 100)}%` : "—", `${riskReview} messages have one or more signals worth a closer look`)
   );
 
+  renderLabelTypeGraphs(reportRows);
   renderBreakdown(
     document.getElementById("purpose-breakdown"),
     PURPOSE_LABELS,
@@ -611,6 +806,7 @@ function applyLabelOutcomesToRows(outcome) {
       syncLabelRowStatus(row);
     }
   }
+  renderLabelTypeGraphs(reportRows);
 }
 
 function labelOutcomeMessage(outcome) {
@@ -723,6 +919,7 @@ scanButton.addEventListener("click", async () => {
           bodyTruncated: row.bodyTruncated,
           links: row.links,
           linksTruncated: row.linksTruncated,
+          attachmentNames: row.attachmentNames || [],
           recipientRelation: row.recipientRelation
         } });
       }
@@ -792,6 +989,11 @@ function isAnalysisResponse(result) {
     && result.importanceProbability >= 0
     && result.importanceProbability <= 1
     && typeof result?.likelyNeedsAttention === "boolean"
+    && (result?.misdirectedProbability === undefined
+      || (typeof result.misdirectedProbability === "number"
+        && result.misdirectedProbability >= 0
+        && result.misdirectedProbability <= 1))
+    && (result?.likelyMisdirected === undefined || typeof result.likelyMisdirected === "boolean")
     && Array.isArray(result?.signals)
     && result.signals.every((signal) => typeof signal?.label === "string");
 }
